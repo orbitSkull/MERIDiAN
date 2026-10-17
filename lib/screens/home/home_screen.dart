@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../models/user.dart';
 import '../../services/auth_service.dart';
 import '../../services/usage_username_availability.dart';
 import '../../theme/app_theme.dart';
@@ -11,15 +10,14 @@ import 'feed_screen.dart';
 import 'settings_screen.dart';
 
 /// Main screen after login/register — 4-tab bottom nav, UI-only.
+///
+/// No profile parameter. The settings tab reads the signed-in user from
+/// [AuthService] itself, which is what stopped the login screen's
+/// `HomeScreen(auth: ...)` from rendering a signed-out account screen.
 class HomeScreen extends StatefulWidget {
   final AuthService auth;
 
-  /// Passed to the settings tab so Account can show the signed-in user.
-  /// Null while signed out, which the settings hub handles by hiding the
-  /// account rows rather than rendering an empty profile.
-  final UserProfile? profile;
-
-  const HomeScreen({super.key, required this.auth, this.profile});
+  const HomeScreen({super.key, required this.auth});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -35,7 +33,6 @@ class _HomeScreenState extends State<HomeScreen> {
     const AiScreen(),
     SettingsScreen(
       auth: widget.auth,
-      profile: widget.profile,
       // The real checker, built from the client AuthService already owns. The
       // screen falls back to the local fake only when this is null, which is
       // what a widget test without an AuthService gets.

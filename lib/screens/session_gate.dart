@@ -43,15 +43,7 @@ class _SessionGateState extends State<SessionGate> {
         final status = snapshot.data!;
         return switch (status) {
           SessionStatus.signedIn ||
-          SessionStatus.signedInOffline => HomeScreen(
-            auth: widget.auth,
-            // Read from the service rather than passed in: the cached profile
-            // is restored during bootstrap, so by the time this builds it is
-            // populated for both the online and the offline path. Null when
-            // the cache was cleared or the token outlived the profile, and the
-            // settings hub handles that by hiding the account rows.
-            profile: widget.auth.user,
-          ),
+          SessionStatus.signedInOffline => HomeScreen(auth: widget.auth),
           SessionStatus.signedOut => OnboardingScreen(auth: widget.auth),
         };
       },

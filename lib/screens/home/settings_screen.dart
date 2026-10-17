@@ -18,26 +18,25 @@ import '../settings/web/web_connect_screen.dart';
 ///
 /// A hub: each of the six categories is a destination rather than a panel, so
 /// the list stays scannable and each category owns its own sections.
+///
+/// The profile is read from [AuthService] rather than passed in. It used to be a
+/// constructor argument, and every call site had to remember to supply it -- the
+/// login screen did not, so signing in landed you here looking signed out. One
+/// source of truth that updates itself cannot be forgotten.
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
     super.key,
     required this.auth,
-    required this.profile,
     this.usernameAvailability,
   });
 
   final AuthService auth;
 
-  /// Null while signed out, in which case the account rows are not shown.
-  final UserProfile? profile;
-
   /// Injected so the username screen can be exercised with a fake checker.
   final UsernameAvailability? usernameAvailability;
 
   void _push(BuildContext context, Widget screen) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => screen),
-    );
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
   }
 
   Future<void> _logout(BuildContext context, {String? reason}) async {
@@ -77,15 +76,18 @@ class SettingsScreen extends StatelessWidget {
       (_) => false,
     );
     if (reason != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(reason)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(reason)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final profile = this.profile;
+    // Watched, not read: an edit made deeper in settings updates the cached
+    // profile, and the summary card has to follow it without anyone rebuilding
+    // this by hand.
+    final profile = context.watch<AuthService>().user;
     final store = context.watch<SettingsStore>();
     final api = profile == null ? null : auth.api;
 
@@ -129,10 +131,8 @@ class SettingsScreen extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-                onTap: () => _push(
-                  context,
-                  entry.build(context, profile, auth.api),
-                ),
+                onTap: () =>
+                    _push(context, entry.build(context, profile, auth.api)),
               ),
             ),
           ),
@@ -214,8 +214,7 @@ final List<_Category> _categories = [
   _Category(
     icon: Icons.person_outline_rounded,
     title: 'Account settings',
-    subtitle: (context, profile, _) =>
-        profile?.preferredName.isNotEmpty == true
+    subtitle: (context, profile, _) => profile?.preferredName.isNotEmpty == true
         ? '${profile!.preferredName}${profile.hasUsername ? '  ·  @${profile.username}' : ''}'
         : 'Profile, username, security',
     build: (context, profile, api) => profile == null
@@ -246,9 +245,8 @@ final List<_Category> _categories = [
     icon: Icons.block_outlined,
     title: 'Block list',
     subtitle: (context, _, _) => 'Manage blocked accounts',
-    build: (context, profile, api) => profile == null
-        ? const _SignedOutNotice()
-        : BlockListScreen(api: api),
+    build: (context, profile, api) =>
+        profile == null ? const _SignedOutNotice() : BlockListScreen(api: api),
   ),
   _Category(
     icon: Icons.laptop_chromebook_outlined,
