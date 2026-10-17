@@ -175,6 +175,75 @@ class DeviceSession {
   }
 }
 
+/// Someone in the college, as returned by a handle lookup.
+///
+/// Deliberately thin. A search result is not a profile: it carries what is
+/// needed to decide whether to talk to somebody, and nothing that would turn the
+/// lookup into a directory of the college.
+class DirectoryUser {
+  const DirectoryUser({
+    required this.username,
+    required this.firstName,
+    required this.surname,
+    required this.role,
+    this.collegeCode,
+  });
+
+  final String username;
+  final String firstName;
+  final String surname;
+  final String role;
+  final String? collegeCode;
+
+  String get fullName {
+    final joined = '$firstName $surname'.trim();
+    return joined.isEmpty ? username : joined;
+  }
+
+  String get roleLabel => switch (role) {
+    'student' => 'Student',
+    'faculty' => 'Faculty',
+    'moderator' => 'Moderator',
+    _ => role,
+  };
+
+  factory DirectoryUser.fromJson(Map<String, dynamic> json) => DirectoryUser(
+    username: json['username'] as String? ?? '',
+    firstName: json['first_name'] as String? ?? '',
+    surname: json['surname'] as String? ?? '',
+    role: json['role'] as String? ?? 'student',
+    collegeCode: json['college_code'] as String?,
+  );
+}
+
+/// The answer to "does this handle exist, and who is it".
+///
+/// [available] is the same signal the availability checker gives: true means the
+/// handle is free or simply does not match anybody. The endpoint answers
+/// identically for both on purpose, so this cannot be used to find out who is
+/// registered.
+class UserLookup {
+  const UserLookup({required this.found, this.user});
+
+  final bool found;
+  final DirectoryUser? user;
+
+  /// No match, whether because the handle is free or because the lookup was
+  /// answered without a query.
+  static const UserLookup notFound = UserLookup(found: false);
+
+  factory UserLookup.fromJson(Map<String, dynamic> json) {
+    final raw = json['user'];
+    final user = raw is Map<String, dynamic>
+        ? DirectoryUser.fromJson(raw)
+        : null;
+    // `found` and the body are read together rather than trusting one: a
+    // response claiming to have found somebody with no user object is treated
+    // as a miss, not rendered as a blank tile.
+    return UserLookup(found: json['found'] == true && user != null, user: user);
+  }
+}
+
 /// Someone this account has blocked.
 class BlockedUser {
   const BlockedUser({

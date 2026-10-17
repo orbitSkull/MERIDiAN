@@ -307,6 +307,25 @@ void main() {
       final handle = 'contract${DateTime.now().microsecondsSinceEpoch % 100000}';
       expect(await settingsClient.saveUsername(handle), handle);
       expect((await settingsClient.me()).username, handle);
+
+      // And the lookup that the new-chat screen depends on can find it again.
+      final found = await settingsClient.lookupUser(handle);
+      expect(found.found, isTrue);
+      expect(found.user?.username, handle);
+    });
+
+    test('an unknown handle answers the same shape, with no user', () async {
+      if (!reachable) {
+        markTestSkipped('No server');
+        return;
+      }
+      final missing = await settingsClient.lookupUser(
+        'nobody.${DateTime.now().microsecondsSinceEpoch % 100000}',
+      );
+      // The endpoint answers a miss identically whatever the reason, which is
+      // what stops this from being a way to test who is registered.
+      expect(missing.found, isFalse);
+      expect(missing.user, isNull);
     });
   });
 }

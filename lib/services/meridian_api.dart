@@ -62,4 +62,11 @@ abstract class MeridianApi {
 
   /// Change the handle. Returns the handle the server settled on.
   Future<String> saveUsername(String username);
+
+  /// Resolve an exact handle to the person behind it.
+  ///
+  /// Exact, not a prefix search. The lookup endpoint answers "no match" the same
+  /// way for every miss on purpose, so this cannot be used to discover who is
+  /// registered on the college.
+  Future<UserLookup> lookupUser(String username);
 }

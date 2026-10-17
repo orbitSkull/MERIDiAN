@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 
+import '../../services/meridian_api.dart';
 import 'new_chat_screen.dart';
 import 'widgets/empty_state.dart';
 
 class ChatsScreen extends StatelessWidget {
-  const ChatsScreen({super.key});
+  const ChatsScreen({super.key, required this.api});
+
+  /// Passed to the new-chat screen, which needs it to look somebody up.
+  final MeridianApi api;
 
   void _openNewChat(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const NewChatScreen()),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => NewChatScreen(api: api)));
   }
 
   @override
@@ -28,10 +32,13 @@ class ChatsScreen extends StatelessWidget {
                 hintText: 'Search messages or names…',
                 prefixIcon: const Icon(Icons.search_rounded),
                 filled: true,
-                fillColor:
-                    scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                fillColor: scheme.surfaceContainerHighest.withValues(
+                  alpha: 0.5,
+                ),
                 contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 12),
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(99),
                   borderSide: BorderSide.none,

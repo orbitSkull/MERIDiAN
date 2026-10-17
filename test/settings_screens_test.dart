@@ -28,6 +28,11 @@ class ScriptedApi implements MeridianApi {
   ApiException? failUpdateProfile;
   ApiException? failPassword;
   ApiException? failBlock;
+  ApiException? failLookup;
+
+  /// What [lookupUser] answers, and the last handle it was asked about.
+  UserLookup? lookupAnswer;
+  String? lastLookup;
 
   final List<Map<String, String?>> profileWrites = [];
   final List<int> revoked = [];
@@ -117,6 +122,14 @@ class ScriptedApi implements MeridianApi {
   Future<String> saveUsername(String username) async {
     savedUsername = username;
     return username;
+  }
+
+  @override
+  Future<UserLookup> lookupUser(String username) async {
+    final failure = failLookup;
+    if (failure != null) throw failure;
+    lastLookup = username;
+    return lookupAnswer ?? UserLookup.notFound;
   }
 }
 

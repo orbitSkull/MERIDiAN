@@ -463,6 +463,22 @@ class ApiClient implements MeridianApi {
     return response.data?['username'] as String? ?? username;
   }
 
+  @override
+  Future<UserLookup> lookupUser(String username) async {
+    await loadAccessToken();
+    // Path-encoded: handles may contain dots and underscores, and a raw one
+    // would be fine, but a stray slash from a pasted value would change the
+    // path rather than being looked up.
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>(
+        '/users/by-username/${Uri.encodeComponent(username.trim().toLowerCase())}',
+      ),
+    );
+    final data = response.data;
+    if (data == null) return UserLookup.notFound;
+    return UserLookup.fromJson(data);
+  }
+
   /// GET a JSON object from the API.
   ///
   /// Exposed for endpoints that are not tied to a model, such as username

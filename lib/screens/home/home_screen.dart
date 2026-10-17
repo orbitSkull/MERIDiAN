@@ -28,7 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final PageController _pageController = PageController();
 
   late final List<Widget> _pages = [
-    const ChatsScreen(),
+    ChatsScreen(api: widget.auth.api),
     const FeedScreen(),
     const AiScreen(),
     SettingsScreen(
