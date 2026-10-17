@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/user.dart';
 import '../../services/auth_service.dart';
+import '../../services/usage_username_availability.dart';
 import '../../theme/app_theme.dart';
 import 'ai_history_screen.dart';
 import 'ai_screen.dart';
@@ -32,7 +33,14 @@ class _HomeScreenState extends State<HomeScreen> {
     const ChatsScreen(),
     const FeedScreen(),
     const AiScreen(),
-    SettingsScreen(auth: widget.auth, profile: widget.profile),
+    SettingsScreen(
+      auth: widget.auth,
+      profile: widget.profile,
+      // The real checker, built from the client AuthService already owns. The
+      // screen falls back to the local fake only when this is null, which is
+      // what a widget test without an AuthService gets.
+      usernameAvailability: ApiUsernameAvailability(widget.auth.api),
+    ),
   ];
 
   @override

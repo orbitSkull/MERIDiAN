@@ -315,6 +315,30 @@ class ApiClient {
     return UserProfile.fromJson(response.data!);
   }
 
+  /// GET a JSON object from the API.
+  ///
+  /// Exposed for endpoints that are not tied to a model, such as username
+  /// availability, where the response is read field by field.
+  ///
+  /// Deliberately returns 200-aware data rather than throwing on 404: the
+  /// username checker answers 200 for both outcomes, because a status code that
+  /// differs between "free" and "taken" would leak what the body is trying to
+  /// hide.
+  Future<Map<String, dynamic>> getJson(
+    String path, {
+    Map<String, dynamic>? query,
+  }) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>(path, queryParameters: query),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response from $path', statusCode: response.statusCode);
+    }
+    return data;
+  }
+
   /// Best-effort server-side revocation. Never blocks the local logout.
   Future<void> logout() async {
     final refreshToken = await tokens.readRefreshToken();

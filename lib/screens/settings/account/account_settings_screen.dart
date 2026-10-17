@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/user.dart';
 import '../widgets/settings_tile.dart';
+import '../../../services/usage_username_availability.dart';
 import 'username_screen.dart';
 
 /// Account settings.

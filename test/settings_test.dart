@@ -4,6 +4,7 @@ import 'package:meridian/models/call_log.dart';
 import 'package:meridian/models/user.dart';
 import 'package:meridian/models/username.dart';
 import 'package:meridian/screens/settings/account/username_screen.dart';
+import 'package:meridian/services/usage_username_availability.dart';
 import 'package:meridian/services/settings_store.dart';
 import 'package:provider/provider.dart';
 
@@ -20,9 +21,9 @@ class _FakeAvailability implements UsernameAvailability {
   Future<AvailabilityResult> check(String username) async {
     asked.add(username);
     if (taken.contains(username)) {
-      return AvailabilityResult.taken(alternatives);
+      return AvailabilityResult(available: false, suggestions: alternatives);
     }
-    return const AvailabilityResult.available();
+    return const AvailabilityResult.ok();
   }
 }
 

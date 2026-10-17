@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../../models/user.dart';
 import '../../../models/username.dart';
+import '../../../services/usage_username_availability.dart';
 import '../widgets/settings_tile.dart';
 
 /// Stand-in for the server-side availability check.
@@ -13,67 +14,20 @@ import '../widgets/settings_tile.dart';
 /// backend answers from a Bloom filter backed by a unique index. Until that
 /// endpoint exists this decides locally from [taken], so the screen can be
 /// built and exercised end to end.
-///
-/// Two rules the real service must also enforce, because they are easy to lose
-/// when only the client checks:
-///
-///   * Every answer must take about the same time whether or not the name is
-///     taken. A fast "no" and a slow "yes" is an enumeration oracle: it tells a
-///     stranger who is registered on the platform.
-///   * The endpoint is rate limited harder than login. The backend already has
-///     an account and an IP limiter; this needs its own bucket, since an
-///     unlimited checker is a directory of every student at the college.
-abstract class UsernameAvailability {
-  Future<AvailabilityResult> check(String username);
-}
-
-class AvailabilityResult {
-  const AvailabilityResult.available()
-    : available = true,
-      suggestions = const [];
-
-  const AvailabilityResult.taken(this.suggestions) : available = false;
-
-  final bool available;
-
-  /// Alternatives to offer, already ordered. Empty when there is nothing
-  /// useful to suggest.
-  final List<String> suggestions;
-}
-
-/// Deterministic local fake, so the screen behaves consistently in tests and
-/// demos instead of flipping at random.
-class FakeUsernameAvailability implements UsernameAvailability {
-  FakeUsernameAvailability({Set<String>? taken})
-    : _taken = taken ?? const {'aarav.sharma', 'meera.iyer', 'admin'};
-
-  final Set<String> _taken;
-
-  @override
-  Future<AvailabilityResult> check(String username) async {
-    // A short delay so the screen's pending state is visible, which is what a
-    // real network round trip looks like.
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-    if (_taken.contains(username)) {
-      return AvailabilityResult.taken(
-        _alternatives(username),
-      );
-    }
-    return const AvailabilityResult.available();
-  }
-
-  List<String> _alternatives(String username) {
-    final base = username.contains('.')
-        ? username.substring(0, username.lastIndexOf('.'))
-        : username;
-    return [
-      for (var n = 2; n <= 4; n++)
-        if (!_taken.contains('$base.$n')) '$base.$n',
-    ];
-  }
-}
-
 /// Username editor.
+///
+/// Availability lives in lib/services/usage_username_availability.dart so the
+/// transport can change without touching this widget, and so a widget test can
+/// inject a fake without building a Dio instance.
+///
+/// Two rules the server also enforces, since they are easy to lose when only
+/// the client checks:
+///
+///   * Every answer takes about the same time whether or not the name is
+///     taken. A fast "free" and a slow "taken" is an enumeration oracle: it
+///     tells a stranger who is registered.
+///   * The endpoint is rate limited harder than login. An unlimited checker is
+///     a directory of every student at the college.
 ///
 /// Shows the current handle, validates as the user types, and checks
 /// availability after a pause in typing. Nothing is saved server side yet.
