@@ -244,6 +244,44 @@ class UserLookup {
   }
 }
 
+/// A page of people matching a handle search.
+///
+/// [truncated] is the field that matters most here: the server caps how many
+/// rows one search returns, and without being told, a list of twenty reads as
+/// "these are the only twenty people at the college".
+class UserSearch {
+  const UserSearch({
+    required this.query,
+    required this.results,
+    this.truncated = false,
+  });
+
+  final String query;
+  final List<DirectoryUser> results;
+
+  /// More people matched than were returned.
+  final bool truncated;
+
+  static const UserSearch empty = UserSearch(query: '', results: []);
+
+  bool get isEmpty => results.isEmpty;
+
+  factory UserSearch.fromJson(Map<String, dynamic> json) {
+    final raw = json['results'];
+    final rows = raw is List
+        ? raw
+              .whereType<Map<String, dynamic>>()
+              .map(DirectoryUser.fromJson)
+              .toList()
+        : const <DirectoryUser>[];
+    return UserSearch(
+      query: json['query'] as String? ?? '',
+      results: rows,
+      truncated: json['truncated'] == true,
+    );
+  }
+}
+
 /// Someone this account has blocked.
 class BlockedUser {
   const BlockedUser({

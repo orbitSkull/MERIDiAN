@@ -69,4 +69,12 @@ abstract class MeridianApi {
   /// way for every miss on purpose, so this cannot be used to discover who is
   /// registered on the college.
   Future<UserLookup> lookupUser(String username);
+
+  /// Find people whose handle matches [query] anywhere in it.
+  ///
+  /// Unlike [lookupUser] this *is* a directory: it needs a session, it is rate
+  /// limited like the availability checker, the server refuses a query shorter
+  /// than three characters, and the result carries a truncated flag because the
+  /// server caps how many rows one search returns.
+  Future<UserSearch> searchUsers(String query);
 }

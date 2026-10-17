@@ -28,7 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final PageController _pageController = PageController();
 
   late final List<Widget> _pages = [
-    ChatsScreen(api: widget.auth.api),
+    ChatsScreen(api: widget.auth.api, myUsername: widget.auth.user?.username),
     const FeedScreen(),
     const AiScreen(),
     SettingsScreen(
@@ -61,9 +61,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openAiHistory() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const AiHistoryScreen()),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const AiHistoryScreen()));
   }
 
   List<Widget> _actionsFor(int index) {
@@ -102,14 +102,13 @@ class _HomeScreenState extends State<HomeScreen> {
               // mode instead made the first tap appear to do nothing.
               final isDark = Theme.of(context).brightness == Brightness.dark;
               return IconButton(
-                onPressed: () =>
-                    AppThemeMode.toggle(currentlyDark: isDark),
+                onPressed: () => AppThemeMode.toggle(currentlyDark: isDark),
                 icon: Icon(
-                  isDark
-                      ? Icons.light_mode_outlined
-                      : Icons.dark_mode_outlined,
+                  isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
                 ),
-                tooltip: isDark ? 'Switch to light mode' : 'Switch to dark mode',
+                tooltip: isDark
+                    ? 'Switch to light mode'
+                    : 'Switch to dark mode',
               );
             },
           ),
@@ -127,8 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
         automaticallyImplyLeading: false,
         centerTitle: false,
         title: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: scheme.primary.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(10),
@@ -206,7 +204,11 @@ class _OfflineBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          const Icon(Icons.cloud_off_rounded, size: 18, color: Color(0xFF92400E)),
+          const Icon(
+            Icons.cloud_off_rounded,
+            size: 18,
+            color: Color(0xFF92400E),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(

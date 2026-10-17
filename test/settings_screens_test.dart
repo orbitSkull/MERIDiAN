@@ -131,6 +131,10 @@ class ScriptedApi implements MeridianApi {
     lastLookup = username;
     return lookupAnswer ?? UserLookup.notFound;
   }
+
+  @override
+  Future<UserSearch> searchUsers(String query) async =>
+      throw UnimplementedError();
 }
 
 UserProfile _profile() => const UserProfile(

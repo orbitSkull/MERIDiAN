@@ -5,15 +5,20 @@ import 'new_chat_screen.dart';
 import 'widgets/empty_state.dart';
 
 class ChatsScreen extends StatelessWidget {
-  const ChatsScreen({super.key, required this.api});
+  const ChatsScreen({super.key, required this.api, this.myUsername});
 
-  /// Passed to the new-chat screen, which needs it to look somebody up.
+  /// Passed to the new-chat screen, which needs it to search for people.
   final MeridianApi api;
 
+  /// The signed-in handle, so search does not list you as somebody to message.
+  final String? myUsername;
+
   void _openNewChat(BuildContext context) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => NewChatScreen(api: api)));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NewChatScreen(api: api, myUsername: myUsername),
+      ),
+    );
   }
 
   @override

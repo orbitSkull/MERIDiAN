@@ -132,6 +132,9 @@ class FakeMeridianApi implements MeridianApi {
 
   @override
   Future<UserLookup> lookupUser(String username) async => UserLookup.notFound;
+
+  @override
+  Future<UserSearch> searchUsers(String query) async => UserSearch.empty;
 }
 
 UserProfile _profile({

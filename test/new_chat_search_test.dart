@@ -6,19 +6,25 @@ import 'package:meridian/screens/home/new_chat_screen.dart';
 import 'package:meridian/services/api_client.dart';
 import 'package:meridian/services/meridian_api.dart';
 
-/// Answers lookups from a script instead of the network.
-class LookupApi implements MeridianApi {
-  UserLookup answer = UserLookup.notFound;
+/// Answers searches from a script, and records what was asked.
+///
+/// Recording the queries is the point of half of these tests: the interesting
+/// failures are the requests that should never have been made.
+class SearchApi implements MeridianApi {
+  UserSearch answer = UserSearch.empty;
   ApiException? failure;
   final List<String> asked = [];
 
   @override
-  Future<UserLookup> lookupUser(String username) async {
-    asked.add(username);
+  Future<UserSearch> searchUsers(String query) async {
+    asked.add(query);
     final error = failure;
     if (error != null) throw error;
     return answer;
   }
+
+  @override
+  Future<UserLookup> lookupUser(String username) async => UserLookup.notFound;
 
   @override
   Future<UserProfile> me() async => throw UnimplementedError();
@@ -76,83 +82,84 @@ const _aarav = DirectoryUser(
   collegeCode: 'MERIDIAN',
 );
 
-/// Types a handle and waits out the debounce plus the lookup.
-Future<void> search(WidgetTester tester, String handle) async {
-  await tester.enterText(find.byType(TextField).first, handle);
+const _kavya = DirectoryUser(
+  username: 'k.aarav',
+  firstName: 'Kavya',
+  surname: 'Menon',
+  role: 'faculty',
+);
+
+UserSearch _results(List<DirectoryUser> people, {bool truncated = false}) =>
+    UserSearch(query: 'aar', results: people, truncated: truncated);
+
+/// Types a query and waits out the debounce and the search.
+Future<void> type(WidgetTester tester, String query) async {
+  await tester.enterText(find.byType(TextField).first, query);
   await tester.pump(const Duration(milliseconds: 600));
   await tester.pumpAndSettle();
 }
 
 void main() {
-  late LookupApi api;
+  late SearchApi api;
 
-  setUp(() => api = LookupApi());
+  setUp(() => api = SearchApi());
 
-  Future<void> open(WidgetTester tester) async {
+  Future<void> open(WidgetTester tester, {String? myUsername}) async {
     tester.view.physicalSize = const Size(500, 1800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(home: NewChatScreen(api: api)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: NewChatScreen(api: api, myUsername: myUsername),
+      ),
+    );
     await tester.pumpAndSettle();
   }
 
   testWidgets('says what to do before anything is typed', (tester) async {
     await open(tester);
 
-    expect(find.text('Find somebody by their handle'), findsOneWidget);
-    expect(find.text('Message'), findsNothing);
+    expect(find.text('Find somebody to message'), findsOneWidget);
+    expect(find.text('At least 3 characters.'), findsOneWidget);
   });
 
-  testWidgets('an exact handle resolves to the person', (tester) async {
-    api.answer = const UserLookup(found: true, user: _aarav);
+  testWidgets('lists everybody whose handle contains the query', (
+    tester,
+  ) async {
+    api.answer = _results([_aarav, _kavya]);
     await open(tester);
 
-    await search(tester, 'aarav.sharma');
+    // A partial query, matching in the middle of one handle and the start of
+    // the other.
+    await type(tester, 'aar');
 
     expect(find.text('Aarav Sharma'), findsOneWidget);
-    expect(find.textContaining('@aarav.sharma'), findsOneWidget);
-    expect(find.textContaining('Student'), findsOneWidget);
-    expect(find.textContaining('MERIDIAN'), findsOneWidget);
-    expect(find.text('Message'), findsOneWidget);
+    expect(find.text('Kavya Menon'), findsOneWidget);
+    expect(find.textContaining('@k.aarav'), findsOneWidget);
+    expect(find.textContaining('Faculty'), findsOneWidget);
   });
 
   testWidgets('uppercase is normalised before the request', (tester) async {
-    api.answer = const UserLookup(found: true, user: _aarav);
+    api.answer = _results([_aarav]);
     await open(tester);
 
-    await search(tester, 'Aarav.Sharma');
+    await type(tester, 'AAR');
 
-    // Handles are lowercase. Asking with capitals would be answered from the
-    // grammar without a query, so the person would never be found.
-    expect(api.asked, ['aarav.sharma']);
-    expect(find.text('Aarav Sharma'), findsOneWidget);
+    expect(api.asked, ['aar']);
   });
 
-  testWidgets('a miss says no account found, and blames nothing', (
-    tester,
-  ) async {
+  testWidgets('a short query is never sent', (tester) async {
     await open(tester);
 
-    await search(tester, 'nobody.here');
-
-    expect(find.text('No account found'), findsOneWidget);
-    // Must not imply the handle is free, because the endpoint answers a miss the
-    // same way whether or not somebody holds it.
-    expect(find.textContaining('available'), findsNothing);
-    expect(find.text('Message'), findsNothing);
-  });
-
-  testWidgets('an invalid handle is not sent at all', (tester) async {
-    await open(tester);
-
-    // Too short, and containing a space.
-    await search(tester, 'ab');
+    await type(tester, 'a');
     expect(api.asked, isEmpty);
 
-    // Well-formed but misspelt still goes, because the server has the final say
-    // on what exists.
-    await search(tester, 'not_a_person');
-    expect(api.asked, ['not_a_person']);
+    await type(tester, 'aa');
+    expect(api.asked, isEmpty, reason: 'two characters cannot be searched');
+
+    // Three is the shortest the server answers, and the screen matches it.
+    await type(tester, 'aar');
+    expect(api.asked, ['aar']);
   });
 
   testWidgets('the keyboard refuses characters a handle cannot contain', (
@@ -160,52 +167,98 @@ void main() {
   ) async {
     await open(tester);
 
-    await tester.enterText(find.byType(TextField).first, 'aarav sharma!');
+    await tester.enterText(find.byType(TextField).first, 'aar v!');
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pumpAndSettle();
 
-    // The formatter strips what a handle cannot contain, so the field ends up
-    // holding the normalised handle and that is what gets looked up.
-    expect(api.asked, ['aaravsharma']);
-    expect(find.text('aaravsharma'), findsOneWidget);
+    // Normalised by the input formatter rather than rejected, so the person
+    // does not have to know the rules.
+    expect(api.asked, ['aarv']);
   });
 
-  testWidgets('editing past a result clears it', (tester) async {
-    api.answer = const UserLookup(found: true, user: _aarav);
+  testWidgets('editing away from a result clears the list', (tester) async {
+    api.answer = _results([_aarav, _kavya]);
     await open(tester);
-    await search(tester, 'aarav.sharma');
+    await type(tester, 'aar');
     expect(find.text('Aarav Sharma'), findsOneWidget);
 
-    // Deleting to an invalid handle must not leave Aarav's name sitting under a
-    // handle that no longer matches.
-    await search(tester, 'aa');
+    // Back below the minimum: the names must go rather than sit under a query
+    // that no longer matches them.
+    await type(tester, 'aa');
 
     expect(find.text('Aarav Sharma'), findsNothing);
+    expect(find.text('Kavya Menon'), findsNothing);
+  });
+
+  testWidgets('you are not listed as somebody to message', (tester) async {
+    api.answer = _results([_aarav, _kavya]);
+    await open(tester, myUsername: 'aarav.sharma');
+
+    await type(tester, 'aar');
+
+    expect(find.text('Aarav Sharma'), findsNothing);
+    expect(find.text('Kavya Menon'), findsOneWidget);
+  });
+
+  testWidgets('a query that only matches you says so', (tester) async {
+    api.answer = _results([_aarav]);
+    await open(tester, myUsername: 'aarav.sharma');
+
+    await type(tester, 'aar');
+
+    expect(find.text('That only matched you.'), findsOneWidget);
+  });
+
+  testWidgets('nobody found is a plain empty state', (tester) async {
+    await open(tester);
+
+    await type(tester, 'zzz');
+
+    expect(find.text('Nobody found'), findsOneWidget);
+    expect(find.textContaining('No username contains "zzz"'), findsOneWidget);
+  });
+
+  testWidgets('a capped result says the list is a page', (tester) async {
+    // Otherwise twenty rows read as "these are the only twenty people".
+    api.answer = _results([_aarav, _kavya], truncated: true);
+    await open(tester);
+
+    await type(tester, 'aar');
+
+    expect(find.text('Aarav Sharma'), findsOneWidget);
+    expect(find.textContaining('More people match'), findsOneWidget);
+  });
+
+  testWidgets('an uncapped result shows no such notice', (tester) async {
+    api.answer = _results([_aarav, _kavya]);
+    await open(tester);
+
+    await type(tester, 'aar');
+
+    expect(find.textContaining('More people match'), findsNothing);
   });
 
   testWidgets('an unreachable server offers a retry', (tester) async {
     api.failure = const ApiException('Cannot reach the server');
     await open(tester);
 
-    await search(tester, 'aarav.sharma');
-
+    await type(tester, 'aar');
     expect(find.text('Could not search'), findsOneWidget);
-    expect(find.text('Try again'), findsOneWidget);
 
     api.failure = null;
-    api.answer = const UserLookup(found: true, user: _aarav);
+    api.answer = _results([_aarav]);
     await tester.tap(find.text('Try again'));
     await tester.pumpAndSettle();
 
     expect(find.text('Aarav Sharma'), findsOneWidget);
   });
 
-  testWidgets('message says plainly that chat is not built', (tester) async {
-    api.answer = const UserLookup(found: true, user: _aarav);
+  testWidgets('tapping somebody says chat is not built', (tester) async {
+    api.answer = _results([_aarav, _kavya]);
     await open(tester);
-    await search(tester, 'aarav.sharma');
+    await type(tester, 'aar');
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Message'));
+    await tester.tap(find.text('Aarav Sharma'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('not built yet'), findsOneWidget);

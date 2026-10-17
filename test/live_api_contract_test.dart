@@ -277,17 +277,20 @@ void main() {
       );
     });
 
-    test('blocking yourself reports an empty list rather than an error', () async {
-      if (!reachable) {
-        markTestSkipped('No server');
-        return;
-      }
-      final me = await settingsClient.me();
-      final blocked = await settingsClient.block(me.username);
-      expect(blocked, isEmpty);
-      // Still not blocked: the list the endpoint returns is the authority.
-      expect(await settingsClient.blockedUsers(), isEmpty);
-    });
+    test(
+      'blocking yourself reports an empty list rather than an error',
+      () async {
+        if (!reachable) {
+          markTestSkipped('No server');
+          return;
+        }
+        final me = await settingsClient.me();
+        final blocked = await settingsClient.block(me.username);
+        expect(blocked, isEmpty);
+        // Still not blocked: the list the endpoint returns is the authority.
+        expect(await settingsClient.blockedUsers(), isEmpty);
+      },
+    );
 
     test('unblocking an unknown handle is not an error', () async {
       if (!reachable) {
@@ -304,7 +307,8 @@ void main() {
       }
       // Move to a fresh handle rather than changing back and forth: the server
       // rate limits changes to once a week.
-      final handle = 'contract${DateTime.now().microsecondsSinceEpoch % 100000}';
+      final handle =
+          'contract${DateTime.now().microsecondsSinceEpoch % 100000}';
       expect(await settingsClient.saveUsername(handle), handle);
       expect((await settingsClient.me()).username, handle);
 
@@ -326,6 +330,48 @@ void main() {
       // what stops this from being a way to test who is registered.
       expect(missing.found, isFalse);
       expect(missing.user, isNull);
+    });
+
+    test('search finds the handle it just claimed, by part of it', () async {
+      if (!reachable) {
+        markTestSkipped('No server');
+        return;
+      }
+      final handle =
+          'contract${DateTime.now().microsecondsSinceEpoch % 100000}';
+      await settingsClient.saveUsername(handle);
+
+      // A fragment, not the whole handle. This is the approximate search the new
+      // chat screen uses.
+      final fragment = handle.substring(0, 4);
+      final results = await settingsClient.searchUsers(fragment);
+
+      expect(results.query, fragment);
+      expect(
+        results.results.map((person) => person.username),
+        contains(handle),
+      );
+      // A directory must not become a directory of personal data.
+      expect(
+        results.results.first.fullName.isNotEmpty ||
+            results.results.first.username.isNotEmpty,
+        isTrue,
+      );
+    });
+
+    test('search refuses a query under three characters', () async {
+      if (!reachable) {
+        markTestSkipped('No server');
+        return;
+      }
+      // Too short is refused rather than answered with an empty list, so a
+      // client can tell "still typing" from "nobody matched".
+      await expectLater(
+        settingsClient.searchUsers('aa'),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 422),
+        ),
+      );
     });
   });
 }

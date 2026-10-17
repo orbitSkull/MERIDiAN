@@ -253,18 +253,15 @@ class ApiClient implements MeridianApi {
       return ApiException(data['detail'].toString(), statusCode: statusCode);
     }
 
-    return ApiException(
-      switch (error.type) {
-        DioExceptionType.connectionTimeout ||
-        DioExceptionType.sendTimeout ||
-        DioExceptionType.receiveTimeout =>
-          'The server took too long to respond. Check your connection.',
-        DioExceptionType.connectionError =>
-          'Cannot reach the server. Check your connection.',
-        _ => 'Something went wrong. Please try again.',
-      },
-      statusCode: statusCode,
-    );
+    return ApiException(switch (error.type) {
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout =>
+        'The server took too long to respond. Check your connection.',
+      DioExceptionType.connectionError =>
+        'Cannot reach the server. Check your connection.',
+      _ => 'Something went wrong. Please try again.',
+    }, statusCode: statusCode);
   }
 
   // ---------------------------------------------------------------------
@@ -277,15 +274,17 @@ class ApiClient implements MeridianApi {
     String? password,
     String? moderatorKey,
   }) async {
-    final response = await _guard(() => _dio.post<Map<String, dynamic>>(
-      '/auth/login',
-      data: {
-        'college_code': collegeCode,
-        'identifier': ?identifier,
-        'password': ?password,
-        'moderator_key': ?moderatorKey,
-      },
-    ));
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/auth/login',
+        data: {
+          'college_code': collegeCode,
+          'identifier': ?identifier,
+          'password': ?password,
+          'moderator_key': ?moderatorKey,
+        },
+      ),
+    );
     final body = response.data!;
     final pair = TokenPair.fromJson(body);
     await tokens.save(
@@ -305,18 +304,20 @@ class ApiClient implements MeridianApi {
     String? empId,
     required String password,
   }) async {
-    final response = await _guard(() => _dio.post<Map<String, dynamic>>(
-      '/auth/register',
-      data: {
-        'college_code': collegeCode,
-        'role': role,
-        'first_name': firstName,
-        'surname': surname,
-        'prn': ?prn,
-        'emp_id': ?empId,
-        'password': password,
-      },
-    ));
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/auth/register',
+        data: {
+          'college_code': collegeCode,
+          'role': role,
+          'first_name': firstName,
+          'surname': surname,
+          'prn': ?prn,
+          'emp_id': ?empId,
+          'password': password,
+        },
+      ),
+    );
     return UserProfile.fromJson(response.data!);
   }
 
@@ -397,9 +398,7 @@ class ApiClient implements MeridianApi {
   @override
   Future<List<BlockedUser>> blockedUsers() async {
     await loadAccessToken();
-    final response = await _guard(
-      () => _dio.get<List<dynamic>>('/me/blocks'),
-    );
+    final response = await _guard(() => _dio.get<List<dynamic>>('/me/blocks'));
     return (response.data ?? const <dynamic>[])
         .whereType<Map<String, dynamic>>()
         .map(BlockedUser.fromJson)
@@ -479,6 +478,21 @@ class ApiClient implements MeridianApi {
     return UserLookup.fromJson(data);
   }
 
+  @override
+  Future<UserSearch> searchUsers(String query) async {
+    await loadAccessToken();
+    final trimmed = query.trim().toLowerCase();
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>(
+        '/users/search',
+        queryParameters: {'q': trimmed},
+      ),
+    );
+    final data = response.data;
+    if (data == null) return UserSearch.empty;
+    return UserSearch.fromJson(data);
+  }
+
   /// GET a JSON object from the API.
   ///
   /// Exposed for endpoints that are not tied to a model, such as username
@@ -498,7 +512,10 @@ class ApiClient implements MeridianApi {
     );
     final data = response.data;
     if (data == null) {
-      throw ApiException('Empty response from $path', statusCode: response.statusCode);
+      throw ApiException(
+        'Empty response from $path',
+        statusCode: response.statusCode,
+      );
     }
     return data;
   }
