@@ -105,9 +105,14 @@ static Future<SettingsStore> load() async {
       return;
     }
     if (identical(api, _api)) return;
-    // Fire and forget. A failure is not worth blocking a sign-in for, and the
-    // reason lands in [syncError] for a screen to show.
-    unawaited(attachApi(api));
+    // Deferred, and not for tidiness. This is called from the provider's update
+    // callback, which runs during build, and attachApi notifies immediately to
+    // raise the syncing flag. Notifying during build is an error in Flutter, so
+    // the whole first sign-in would have thrown.
+    scheduleMicrotask(() {
+      if (identical(_api, api)) return;
+      unawaited(attachApi(api));
+    });
   }
 
   /// Stop syncing. The local cache is kept, so signing back in works offline.

@@ -69,8 +69,19 @@ class ApiClient implements MeridianApi {
           Dio(
             BaseOptions(
               baseUrl: '${baseUrl ?? ApiConfig.baseUrl}${ApiConfig.prefix}',
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 15),
+              // Generous, because the API is on a free tier that sleeps after
+              // about fifteen minutes idle and then needs up to a minute to wake.
+              // A 10 second connect timeout gave up while the instance was still
+              // booting, so a cold start reported as "taking too long to
+              // respond" rather than as a slow success.
+              //
+              // The cost of these numbers is a spinner that lingers instead of a
+              // fast failure. That is the right trade for an endpoint that is
+              // genuinely coming back, and the offline banner still appears when
+              // the device genuinely has no route to the server.
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(seconds: 60),
+              sendTimeout: const Duration(seconds: 30),
               headers: {'Accept': 'application/json'},
             ),
           ) {
