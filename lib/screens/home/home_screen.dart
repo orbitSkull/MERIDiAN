@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../models/user.dart';
+import '../../services/auth_service.dart';
 import '../../theme/app_theme.dart';
 import 'ai_history_screen.dart';
 import 'ai_screen.dart';
@@ -9,7 +11,14 @@ import 'settings_screen.dart';
 
 /// Main screen after login/register — 4-tab bottom nav, UI-only.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final AuthService auth;
+
+  /// Passed to the settings tab so Account can show the signed-in user.
+  /// Null while signed out, which the settings hub handles by hiding the
+  /// account rows rather than rendering an empty profile.
+  final UserProfile? profile;
+
+  const HomeScreen({super.key, required this.auth, this.profile});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -19,11 +28,11 @@ class _HomeScreenState extends State<HomeScreen> {
   int _index = 0;
   late final PageController _pageController = PageController();
 
-  static const _pages = [
-    ChatsScreen(),
-    FeedScreen(),
-    AiScreen(),
-    SettingsScreen(),
+  late final List<Widget> _pages = [
+    const ChatsScreen(),
+    const FeedScreen(),
+    const AiScreen(),
+    SettingsScreen(auth: widget.auth, profile: widget.profile),
   ];
 
   @override
@@ -83,15 +92,19 @@ class _HomeScreenState extends State<HomeScreen> {
           ValueListenableBuilder<ThemeMode>(
             valueListenable: AppThemeMode.notifier,
             builder: (context, mode, _) {
-              final isDark = mode == ThemeMode.dark;
+              // The brightness the user is actually looking at, not the
+              // stored mode. Under ThemeMode.system those differ, and using the
+              // mode instead made the first tap appear to do nothing.
+              final isDark = Theme.of(context).brightness == Brightness.dark;
               return IconButton(
-                onPressed: AppThemeMode.toggle,
+                onPressed: () =>
+                    AppThemeMode.toggle(currentlyDark: isDark),
                 icon: Icon(
                   isDark
                       ? Icons.light_mode_outlined
                       : Icons.dark_mode_outlined,
                 ),
-                tooltip: isDark ? 'Light mode' : 'Dark mode',
+                tooltip: isDark ? 'Switch to light mode' : 'Switch to dark mode',
               );
             },
           ),
@@ -129,10 +142,19 @@ class _HomeScreenState extends State<HomeScreen> {
         actionsIconTheme: IconThemeData(color: scheme.onSurface),
         actions: _actionsFor(_index),
       ),
-      body: PageView(
-        controller: _pageController,
-        onPageChanged: (i) => setState(() => _index = i),
-        children: _pages,
+      body: Column(
+        children: [
+          // Offline banner: shown when the app is running on cached data
+          // because the server was unreachable at launch.
+          if (widget.auth.isOffline) const _OfflineBanner(),
+          Expanded(
+            child: PageView(
+              controller: _pageController,
+              onPageChanged: (i) => setState(() => _index = i),
+              children: _pages,
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
@@ -157,6 +179,39 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.settings_outlined),
             selectedIcon: Icon(Icons.settings_rounded),
             label: 'Settings',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown when the server was unreachable at launch.
+///
+/// The session is still valid; this only explains why fresh data may be
+/// missing, and reassures the user they have not been signed out.
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFFEF3C7),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_rounded, size: 18, color: Color(0xFF92400E)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Offline. Showing your cached data.',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF92400E),
+              ),
+            ),
           ),
         ],
       ),

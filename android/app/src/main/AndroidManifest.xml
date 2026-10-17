@@ -1,8 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The app is API-driven, so INTERNET must be declared in the MAIN
+         manifest. Flutter's template only adds it to the debug and profile
+         manifests, which means a release build has no network access at all. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <application
         android:label="MERIDiAN"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"

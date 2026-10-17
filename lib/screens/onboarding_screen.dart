@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../services/auth_service.dart';
 import '../../theme/app_theme.dart';
 import 'auth/login_screen.dart';
 
@@ -16,7 +17,9 @@ class OnboardingData {
 }
 
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key});
+  final AuthService auth;
+
+  const OnboardingScreen({super.key, required this.auth});
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -61,14 +64,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
     } else {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        MaterialPageRoute(builder: (_) => LoginScreen(auth: widget.auth)),
       );
     }
   }
 
   void _skip() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      MaterialPageRoute(builder: (_) => LoginScreen(auth: widget.auth)),
     );
   }
 

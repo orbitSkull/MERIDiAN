@@ -43,3 +43,24 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+# --- Added alongside the settings work ---------------------------------
+# A debug APK built from the project root during early testing. Release builds
+# land in build/ and are already ignored, but a stray copy here would
+# otherwise be committed as a 48 MB binary.
+meridian-debug.apk
+*.aab
+
+# Signing material. The upload key must never reach the repository; losing it
+# means Play Store can no longer verify updates to an existing listing.
+android/key.properties
+**/*.jks
+**/*.keystore
+**/*.p12
+
+# Local configuration
+.env
+.env.*
+!.env.example
+# Kotlin build state from the Gradle plugin
+android/.kotlin/
+.kotlin/

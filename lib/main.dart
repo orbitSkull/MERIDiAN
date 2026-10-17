@@ -1,29 +1,51 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import 'screens/onboarding_screen.dart';
+import 'screens/session_gate.dart';
+import 'services/auth_service.dart';
+import 'services/settings_store.dart';
 import 'theme/app_theme.dart';
 
-void main() {
-  runApp(const MyApp());
+Future<void> main() async {
+  // Read persisted preferences before the first frame. Doing this inside main
+  // rather than after runApp avoids a flash of the wrong theme on launch,
+  // which is what happened when the mode was never persisted at all.
+  await AppThemeMode.load();
+  final settings = await SettingsStore.load();
+
+  runApp(MeridianApp(auth: AuthService(), settings: settings));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class MeridianApp extends StatelessWidget {
+  const MeridianApp({super.key, required this.auth, required this.settings});
+
+  final AuthService auth;
+  final SettingsStore settings;
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: AppThemeMode.notifier,
-      builder: (context, mode, _) {
-        return MaterialApp(
-          title: 'MERIDiAN',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.light(),
-          darkTheme: AppTheme.dark(),
-          themeMode: mode,
-          home: const OnboardingScreen(),
-        );
-      },
+    // SettingsStore is above MaterialApp so both SessionGate and every screen
+    // below it can read it. Theme stays a ValueListenableBuilder rather than a
+    // provider consumer because AppThemeMode is a static, app-wide singleton
+    // with no instance to pass down.
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AuthService>.value(value: auth),
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+      ],
+      child: ValueListenableBuilder<ThemeMode>(
+        valueListenable: AppThemeMode.notifier,
+        builder: (context, mode, _) {
+          return MaterialApp(
+            title: 'MERIDiAN',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.light(),
+            darkTheme: AppTheme.dark(),
+            themeMode: mode,
+            home: SessionGate(auth: auth),
+          );
+        },
+      ),
     );
   }
 }

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is blocked by default from Android 9 (API 28).
+
+  During development the API is plain HTTP on a development machine, so
+  cleartext is permitted for loopback and private-range hosts only. Everything
+  else still requires HTTPS.
+
+  Before shipping, add the production API domain to the allow-list as an HTTPS
+  entry and remove this override entirely - at that point Caddy on the server
+  terminates TLS and the app should never need cleartext.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android emulator alias for the host machine's loopback. -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Desktop loopback, used by `flutter run -d windows`. -->
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <!-- Development machine on the local network. -->
+        <domain includeSubdomains="false">192.168.1.6</domain>
+    </domain-config>
+</network-security-config>

@@ -103,7 +103,7 @@ class RoleSegmentedControl extends StatelessWidget {
   }
 }
 
-/// Shared styled text field (UI-only, no validation logic).
+/// Shared styled text field.
 class AuthTextField extends StatefulWidget {
   final String label;
   final String hint;
@@ -111,6 +111,7 @@ class AuthTextField extends StatefulWidget {
   final bool obscure;
   final TextInputAction textInputAction;
   final TextCapitalization capitalization;
+  final TextEditingController? controller;
 
   const AuthTextField({
     super.key,
@@ -120,6 +121,7 @@ class AuthTextField extends StatefulWidget {
     this.obscure = false,
     this.textInputAction = TextInputAction.next,
     this.capitalization = TextCapitalization.none,
+    this.controller,
   });
 
   @override
@@ -144,6 +146,7 @@ class _AuthTextFieldState extends State<AuthTextField> {
         ),
         const SizedBox(height: 6),
         TextField(
+          controller: widget.controller,
           obscureText: _hidden,
           textInputAction: widget.textInputAction,
           textCapitalization: widget.capitalization,
