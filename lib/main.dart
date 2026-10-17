@@ -31,7 +31,18 @@ class MeridianApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<AuthService>.value(value: auth),
-        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        // A proxy rather than a plain provider, because preferences only sync
+        // while somebody is signed in. This is where the store learns about the
+        // session: attached on sign-in, detached on sign-out, so a toggle
+        // tapped after leaving the account is never pushed to whoever signs in
+        // next.
+        ChangeNotifierProxyProvider<AuthService, SettingsStore>(
+          create: (_) => settings,
+          update: (_, auth, store) {
+            store!.bindApi(auth.isSignedIn ? auth.api : null);
+            return store;
+          },
+        ),
       ],
       child: ValueListenableBuilder<ThemeMode>(
         valueListenable: AppThemeMode.notifier,

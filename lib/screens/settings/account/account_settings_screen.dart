@@ -1,33 +1,73 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/user.dart';
-import '../widgets/settings_tile.dart';
+import '../../../services/meridian_api.dart';
 import '../../../services/usage_username_availability.dart';
+import '../widgets/settings_tile.dart';
+import 'email_screen.dart';
+import 'password_screen.dart';
+import 'profile_editor_screen.dart';
+import 'sessions_screen.dart';
 import 'username_screen.dart';
 
 /// Account settings.
 ///
-/// The only sub-screen with real behaviour so far is the username editor.
-/// The rest are laid out with the rows they will contain so the information
-/// architecture can be reviewed before the forms are built.
+/// Every row here that can be changed opens a screen that really changes it.
+/// The rows that cannot -- college, role, identifier -- are shown without a
+/// chevron, because a row that looks tappable and opens a dead end is worse
+/// than one that plainly is not.
 class AccountSettingsScreen extends StatelessWidget {
   const AccountSettingsScreen({
     super.key,
     required this.profile,
+    this.api,
     this.usernameAvailability,
+    this.onProfileChanged,
+    this.onSignOutRequired,
   });
 
   final UserProfile profile;
+
+  /// Null only in tests that do not exercise the editable rows.
+  final MeridianApi? api;
+
   final UsernameAvailability? usernameAvailability;
 
-  void _push(BuildContext context, Widget screen) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => screen),
+  /// Called with the fresh profile after an edit, so the caller can update the
+  /// cached one. Without it the screen would show the new value and the rest of
+  /// the app would still show the old one.
+  final ValueChanged<UserProfile>? onProfileChanged;
+
+  /// Called after a password change, because the server has ended every session
+  /// and the app has to send the person back to the login screen.
+  final VoidCallback? onSignOutRequired;
+
+  /// Opens a screen and hands back whatever it returns.
+  ///
+  /// The edit screens pop with the updated profile rather than writing to a
+  /// shared store themselves, so there is one place where a successful edit
+  /// becomes visible.
+  Future<void> _pushEdit(
+    BuildContext context,
+    Widget Function(MeridianApi api, UserProfile profile) builder,
+  ) async {
+    final api = this.api;
+    if (api == null) return;
+    final updated = await Navigator.of(context).push<UserProfile>(
+      MaterialPageRoute<UserProfile>(
+        builder: (_) => builder(api, profile),
+      ),
     );
+    if (updated != null) onProfileChanged?.call(updated);
   }
 
   @override
   Widget build(BuildContext context) {
+    // A local rather than this.api, so it can be promoted to non-null inside the
+    // closures below. A field is not promoted, so every one of them would
+    // otherwise need its own null check.
+    final api = this.api;
+
     return SettingsScaffold(
       title: 'Account settings',
       children: [
@@ -39,8 +79,14 @@ class AccountSettingsScreen extends StatelessWidget {
             SettingsTile(
               icon: Icons.face_outlined,
               title: 'Profile',
-              subtitle: 'Photo, display name, bio',
-              onTap: () => _preview(context, 'Profile'),
+              subtitle: profile.displayName == null
+                  ? 'Photo, display name, bio'
+                  : 'Display name, bio and photo',
+              onTap: () => _pushEdit(
+                context,
+                (api, current) =>
+                    ProfileEditorScreen(api: api, profile: current),
+              ),
             ),
             SettingsTile(
               icon: Icons.alternate_email_rounded,
@@ -48,13 +94,19 @@ class AccountSettingsScreen extends StatelessWidget {
               subtitle: profile.hasUsername
                   ? '@${profile.username}'
                   : 'Not set yet',
-              onTap: () => _push(
-                context,
-                UsernameScreen(
-                  profile: profile,
-                  availability: usernameAvailability,
-                ),
-              ),
+              onTap: api == null
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => UsernameScreen(
+                          profile: profile,
+                          availability: usernameAvailability,
+                          api: api,
+                          onUsernameChanged: (username) => onProfileChanged
+                              ?.call(profile.copyWith(username: username)),
+                        ),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -66,18 +118,16 @@ class AccountSettingsScreen extends StatelessWidget {
           children: [
             SettingsTile(
               icon: Icons.badge_outlined,
-              title: 'Academic ID',
+              title: profile.isFaculty ? 'Employee ID' : 'Academic ID',
               value: profile.identifierLabel ?? 'Not set',
               trailing: profile.identifierLabel == null
-                  ? const Icon(Icons.chevron_right_rounded, size: 20)
+                  ? null
                   : const _VerifiedChip(),
-              onTap: () => _preview(context, 'Academic ID'),
             ),
             SettingsTile(
               icon: Icons.account_balance_outlined,
               title: 'College',
               value: profile.collegeCode ?? 'Not set',
-              onTap: () => _preview(context, 'College'),
             ),
             SettingsTile(
               icon: Icons.workspace_premium_outlined,
@@ -93,11 +143,18 @@ class AccountSettingsScreen extends StatelessWidget {
               icon: Icons.mail_outline_rounded,
               title: 'Email address',
               value: profile.email ?? 'Not set',
-              subtitle: profile.email == null ? 'Add one to secure your account' : null,
+              subtitle: profile.email == null
+                  ? 'Add one to secure your account'
+                  : null,
               trailing: profile.email == null
                   ? const Icon(Icons.chevron_right_rounded, size: 20)
+                  : profile.emailVerified
+                  ? const _VerifiedChip()
                   : const _UnverifiedChip(),
-              onTap: () => _preview(context, 'Email'),
+              onTap: () => _pushEdit(
+                context,
+                (api, current) => EmailScreen(api: api, profile: current),
+              ),
             ),
           ],
         ),
@@ -107,13 +164,28 @@ class AccountSettingsScreen extends StatelessWidget {
             SettingsTile(
               icon: Icons.lock_outline_rounded,
               title: 'Change password',
-              onTap: () => _preview(context, 'Change password'),
+              onTap: api == null
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute<bool>(
+                        builder: (_) => PasswordScreen(
+                          api: api,
+                          onPasswordChanged: () => onSignOutRequired?.call(),
+                        ),
+                      ),
+                    ),
             ),
             SettingsTile(
               icon: Icons.devices_outlined,
               title: 'Active sessions',
               subtitle: 'Devices currently signed in',
-              onTap: () => _preview(context, 'Active sessions'),
+              onTap: api == null
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => SessionsScreen(api: api),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -122,17 +194,18 @@ class AccountSettingsScreen extends StatelessWidget {
           footer:
               'Deleting your account removes your messages and cannot be undone.',
           children: [
-            SettingsTile(
+            // Both still need a backend endpoint and a confirmation flow that
+            // cannot be undone by a mis-tap, so they are labelled rather than
+            // half-built.
+            ComingSoonTile(
               icon: Icons.person_off_outlined,
               title: 'Deactivate account',
               subtitle: 'Hide your profile and stop notifications',
-              onTap: () => _preview(context, 'Deactivate'),
             ),
-            SettingsTile(
+            const ComingSoonTile(
               icon: Icons.delete_outline_rounded,
               title: 'Delete account',
-              destructive: true,
-              onTap: () => _preview(context, 'Delete'),
+              subtitle: 'Remove your account and its data',
             ),
           ],
         ),
@@ -146,12 +219,6 @@ class AccountSettingsScreen extends StatelessWidget {
     'moderator' => 'Moderator',
     _ => role,
   };
-
-  static void _preview(BuildContext context, String what) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$what is not built yet.')),
-    );
-  }
 }
 
 class _ProfileCard extends StatelessWidget {

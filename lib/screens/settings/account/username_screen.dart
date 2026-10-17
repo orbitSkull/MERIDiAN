@@ -5,15 +5,11 @@ import 'package:flutter/services.dart';
 
 import '../../../models/user.dart';
 import '../../../models/username.dart';
+import '../../../services/api_client.dart';
+import '../../../services/meridian_api.dart';
 import '../../../services/usage_username_availability.dart';
 import '../widgets/settings_tile.dart';
 
-/// Stand-in for the server-side availability check.
-///
-/// The real implementation calls `GET /api/v1/users/username/check`, which the
-/// backend answers from a Bloom filter backed by a unique index. Until that
-/// endpoint exists this decides locally from [taken], so the screen can be
-/// built and exercised end to end.
 /// Username editor.
 ///
 /// Availability lives in lib/services/usage_username_availability.dart so the
@@ -29,17 +25,25 @@ import '../widgets/settings_tile.dart';
 ///   * The endpoint is rate limited harder than login. An unlimited checker is
 ///     a directory of every student at the college.
 ///
-/// Shows the current handle, validates as the user types, and checks
-/// availability after a pause in typing. Nothing is saved server side yet.
+/// The availability check and the save are separate calls on purpose. Checking
+/// proves the name is free at that moment; saving is what claims it, and only
+/// the save can fail. Anyone can take the name in between, so a save that
+/// reports a conflict has to be recoverable rather than treated as success.
 class UsernameScreen extends StatefulWidget {
   const UsernameScreen({
     super.key,
     required this.profile,
     this.availability,
+    this.api,
+    this.onUsernameChanged,
   });
 
   final UserProfile profile;
   final UsernameAvailability? availability;
+  final MeridianApi? api;
+
+  /// Called with the handle the server settled on after a successful save.
+  final ValueChanged<String>? onUsernameChanged;
 
   @override
   State<UsernameScreen> createState() => _UsernameScreenState();
@@ -52,18 +56,21 @@ class _UsernameScreenState extends State<UsernameScreen> {
   late final TextEditingController _controller;
   Timer? _debounce;
 
-  String _current = '';
+String _current = '';
   UsernameValidation? _validation;
   AvailabilityResult? _result;
   bool _checking = false;
   bool _dirty = false;
+  bool _saving = false;
+  String? _saveError;
 
   @override
   void initState() {
     super.initState();
-    // Placeholder until the profile carries a username. The real value comes
-    // from the server on first load.
-    _current = 'aarav.sharma';
+    // The handle the server actually has, not a placeholder. Previously this
+    // screen showed "aarav.sharma" to everyone, which made it look saved when
+    // the account was carrying something else entirely.
+    _current = widget.profile.username;
     _controller = TextEditingController(text: _current);
   }
 
@@ -124,19 +131,43 @@ class _UsernameScreenState extends State<UsernameScreen> {
     });
   }
 
-  bool get _canSave {
+bool get _canSave {
     final validation = _validation;
     if (validation == null || !validation.isValid) return false;
-    if (_checking) return false;
+    if (_checking || _saving) return false;
     return _result?.available == true && _dirty;
   }
 
-  void _save() {
+  Future<void> _save() async {
+    final api = widget.api;
     final handle = _controller.text;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Username set to @$handle (not saved yet).')),
-    );
-    Navigator.of(context).pop();
+    if (api == null) return;
+
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+    try {
+      // The server answers with the handle it settled on, not an echo, so what
+      // is stored is what the account actually has.
+      final saved = await api.saveUsername(handle);
+      if (!mounted) return;
+      widget.onUsernameChanged?.call(saved);
+      Navigator.of(context).pop(saved);
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      // The availability check passed a moment ago and this still failed: the
+      // name was taken in between, or the weekly change limit bit. Say so and
+      // let the person try again rather than closing the screen.
+      setState(() {
+        _saving = false;
+        _saveError = error.message;
+        // Force a fresh check so the status line cannot keep claiming the name
+        // is available.
+        _result = null;
+        _dirty = false;
+      });
+    }
   }
 
   @override
@@ -247,11 +278,22 @@ class _UsernameScreenState extends State<UsernameScreen> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-              child: FilledButton(
+child: FilledButton(
                 onPressed: _canSave ? _save : null,
-                child: const Text('Save username'),
+                child: Text(_saving ? 'Saving...' : 'Save username'),
               ),
             ),
+            if (_saveError != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Text(
+                  _saveError!,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
           ],
         ),
       ],

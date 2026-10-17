@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 
+import '../models/settings.dart';
 import '../models/user.dart';
 import 'api_config.dart';
+import 'meridian_api.dart';
 import 'token_store.dart';
 
 /// Why a refresh attempt ended.
@@ -60,7 +62,7 @@ class ApiException implements Exception {
 /// Attaches the access token to every request and, on a 401, refreshes once
 /// and replays the original request. That is what lets the app start straight
 /// into the home screen on later launches instead of showing the login page.
-class ApiClient {
+class ApiClient implements MeridianApi {
   ApiClient({required this.tokens, Dio? dio, String? baseUrl})
     : _dio =
           dio ??
@@ -307,12 +309,147 @@ class ApiClient {
     return UserProfile.fromJson(response.data!);
   }
 
+  @override
   Future<UserProfile> me() async {
     await loadAccessToken();
+    // `/me`, not `/auth/me`. Both need a session, but only this one carries the
+    // handle, display name, bio, avatar and verification flag, so reading the
+    // richer endpoint saves a second request from every settings screen.
+    final response = await _guard(() => _dio.get<Map<String, dynamic>>('/me'));
+    return UserProfile.fromJson(response.data!);
+  }
+
+  @override
+  Future<UserProfile> updateProfile({
+    String? displayName,
+    String? bio,
+    String? avatarUrl,
+    String? email,
+  }) async {
+    await loadAccessToken();
+    // Only the keys the caller actually named. The endpoint is partial, and
+    // sending the rest would blank anything the server has that this screen does
+    // not know about.
+    final data = <String, dynamic>{
+      'display_name': ?displayName,
+      'bio': ?bio,
+      'avatar_url': ?avatarUrl,
+      'email': ?email,
+    };
     final response = await _guard(
-      () => _dio.get<Map<String, dynamic>>('/auth/me'),
+      () => _dio.patch<Map<String, dynamic>>('/me', data: data),
     );
     return UserProfile.fromJson(response.data!);
+  }
+
+  @override
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await loadAccessToken();
+    await _guard(
+      () => _dio.post<void>(
+        '/me/password',
+        data: {
+          'current_password': currentPassword,
+          'new_password': newPassword,
+        },
+      ),
+    );
+  }
+
+  @override
+  Future<List<DeviceSession>> sessions() async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<List<dynamic>>('/me/sessions'),
+    );
+    return (response.data ?? const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(DeviceSession.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> revokeSession(int sessionId) async {
+    await loadAccessToken();
+    await _guard(() => _dio.delete<void>('/me/sessions/$sessionId'));
+  }
+
+  @override
+  Future<void> revokeOtherSessions() async {
+    await loadAccessToken();
+    await _guard(() => _dio.post<void>('/me/sessions/revoke-others'));
+  }
+
+  @override
+  Future<List<BlockedUser>> blockedUsers() async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<List<dynamic>>('/me/blocks'),
+    );
+    return (response.data ?? const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(BlockedUser.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<List<BlockedUser>> block(String username, {String? reason}) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.post<List<dynamic>>(
+        '/me/blocks',
+        data: {
+          'username': username,
+          if (reason != null && reason.isNotEmpty) 'reason': reason,
+        },
+      ),
+    );
+    return (response.data ?? const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(BlockedUser.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> unblock(String username) async {
+    await loadAccessToken();
+    await _guard(() => _dio.delete<void>('/me/blocks/$username'));
+  }
+
+  @override
+  Future<UserPreferences> preferences() async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>('/me/settings'),
+    );
+    return UserPreferences.fromJson(response.data!);
+  }
+
+  @override
+  Future<UserPreferences> updatePreferences(Map<String, bool> changes) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.patch<Map<String, dynamic>>('/me/settings', data: changes),
+    );
+    return UserPreferences.fromJson(response.data!);
+  }
+
+  @override
+  Future<String> saveUsername(String username) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.patch<Map<String, dynamic>>(
+        '/users/username',
+        data: {'username': username},
+      ),
+    );
+    // The endpoint answers with the handle it settled on rather than an
+    // echo, so the caller stores what the server has rather than what it asked
+    // for.
+    return response.data?['username'] as String? ?? username;
   }
 
   /// GET a JSON object from the API.

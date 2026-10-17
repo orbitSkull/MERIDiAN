@@ -1,4 +1,9 @@
-/// The authenticated user as returned by `GET /auth/me`.
+/// The authenticated user.
+///
+/// Decoded from `GET /api/v1/me`, which is a superset of `GET /auth/me`: same
+/// identity fields plus the editable profile and the verification flag. One
+/// endpoint is enough for the whole app, and reading the richer one means the
+/// handle, display name and avatar are available without a second request.
 class UserProfile {
   final int id;
   final String role;
@@ -12,11 +17,22 @@ class UserProfile {
 
   /// Public handle, unique across the platform.
   ///
-  /// The backend does not return this yet, so it decodes to an empty string
-  /// until the username endpoints land. Treat it as optional everywhere rather
-  /// than falling back to a name, because a guessed handle shown to another
-  /// user is worse than showing none.
+  /// Empty only when the server did not send one, which should not happen on
+  /// any account created after usernames shipped. Never substituted with a
+  /// guess: a handle shown to another user that is not really yours is worse
+  /// than showing none.
   final String username;
+
+  /// Name shown instead of the legal one. Null means "fall back to the name".
+  final String? displayName;
+
+  final String? bio;
+  final String? avatarUrl;
+
+  /// Whether [email] has been confirmed. False for an address that was never
+  /// verified, and also for one that was just changed, since a new address has
+  /// not been proven.
+  final bool emailVerified;
 
   const UserProfile({
     required this.id,
@@ -29,11 +45,22 @@ class UserProfile {
     this.email,
     this.collegeCode,
     this.username = '',
+    this.displayName,
+    this.bio,
+    this.avatarUrl,
+    this.emailVerified = false,
   });
 
   bool get hasUsername => username.isNotEmpty;
 
-factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
+  /// The name to show in a header: what they chose, else their legal name.
+  String get preferredName {
+    final chosen = displayName?.trim();
+    if (chosen != null && chosen.isNotEmpty) return chosen;
+    return fullName;
+  }
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
   // Defensive: a truncated or unexpected payload must not crash the app with
   // a cast error. Defaults match the API's own fallbacks.
   id: json['id'] is int ? json['id'] as int : 0,
@@ -44,9 +71,13 @@ factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
   prn: json['prn'] as String?,
   empId: json['emp_id'] as String?,
   email: json['email'] as String?,
-collegeCode: json['college_code'] as String?,
-    username: json['username'] as String? ?? '',
-  );
+  collegeCode: json['college_code'] as String?,
+  username: json['username'] as String? ?? '',
+  displayName: json['display_name'] as String?,
+  bio: json['bio'] as String?,
+  avatarUrl: json['avatar_url'] as String?,
+  emailVerified: json['email_verified'] is bool && json['email_verified'] as bool,
+);
 
   String get fullName =>
       firstName.isEmpty ? surname : '$firstName $surname';
@@ -77,7 +108,41 @@ collegeCode: json['college_code'] as String?,
     'email': email,
     'college_code': collegeCode,
     'username': username,
+    'display_name': displayName,
+    'bio': bio,
+    'avatar_url': avatarUrl,
+    'email_verified': emailVerified,
   };
+
+  /// A copy with the given fields replaced.
+  ///
+  /// Used after an edit so the cached profile matches what the server stored.
+  /// Passing null leaves a field alone, which is why this cannot express
+  /// "clear the bio": the API is asked to clear it and its answer is decoded
+  /// into a whole new profile instead.
+  UserProfile copyWith({
+    String? username,
+    String? email,
+    String? displayName,
+    String? bio,
+    String? avatarUrl,
+    bool? emailVerified,
+  }) => UserProfile(
+    id: id,
+    role: role,
+    status: status,
+    firstName: firstName,
+    surname: surname,
+    prn: prn,
+    empId: empId,
+    email: email ?? this.email,
+    collegeCode: collegeCode,
+    username: username ?? this.username,
+    displayName: displayName ?? this.displayName,
+    bio: bio ?? this.bio,
+    avatarUrl: avatarUrl ?? this.avatarUrl,
+    emailVerified: emailVerified ?? this.emailVerified,
+  );
 }
 
 /// Token pair returned by login and refresh.

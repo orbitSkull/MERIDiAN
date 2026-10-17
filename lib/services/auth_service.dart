@@ -44,6 +44,26 @@ class AuthService extends ChangeNotifier {
 
   ApiClient get api => _client;
 
+  /// Re-read the profile from the server and refresh the offline cache.
+  ///
+  /// Called after an edit in settings. The edit screens return the profile the
+  /// server sent, but re-reading is what guarantees the rest of the app and the
+  /// cached copy agree with the server rather than with whatever was on screen
+  /// when the save happened.
+  ///
+  /// An unreachable server is not a failure here: the edited value is already
+  /// correct locally and the next launch will catch up.
+  Future<void> refreshProfile() async {
+    try {
+      _user = await _client.me();
+      _isOffline = false;
+      await _cacheUser();
+    } on ApiException catch (error) {
+      if (error.isOffline) _isOffline = true;
+    }
+    notifyListeners();
+  }
+
   /// Restore a persisted session so returning users skip the login screen.
   ///
   /// Tries the stored access token, then a single silent refresh. A failed
