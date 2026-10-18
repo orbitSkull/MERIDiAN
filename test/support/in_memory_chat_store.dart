@@ -134,6 +134,33 @@ class InMemoryChatStore implements ChatStore, Outbox {
   }
 
   @override
+  Future<void> applyReceipt({
+    required int conversationId,
+    required int userId,
+    required int upToSeq,
+    required bool read,
+  }) async {
+    // Mirrors the SQL: only acknowledged rows, and only ever forwards.
+    for (var i = 0; i < _messages.length; i++) {
+      final message = _messages[i];
+      if (message.conversationId != conversationId) continue;
+      if (message.senderId == userId) continue; // their own words, not read by them
+      final seq = message.seq;
+      if (seq == null || seq > upToSeq) continue;
+
+      final next = read
+          ? MessageSendState.read
+          : MessageSendState.delivered;
+      final allowed = read
+          ? const [MessageSendState.sent, MessageSendState.delivered]
+          : const [MessageSendState.sent];
+      if (!allowed.contains(message.state)) continue;
+
+      _messages[i] = message.copyWith(state: next);
+    }
+  }
+
+  @override
   Future<void> clear() async {
     clearCount++;
     _messages.clear();

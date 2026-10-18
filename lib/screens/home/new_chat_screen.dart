@@ -387,11 +387,13 @@ class _OpeningState extends State<_Opening> {
         return ConversationScreen(
           controller: ConversationController(
             conversationId: conversation.id,
+            myUserId: widget.myUserId,
             api: widget.chat.api,
             store: widget.chat.store,
             outbox: widget.chat.outbox,
             sender: widget.sender,
             sync: widget.chat.sync,
+            realtime: widget.chat.realtime,
           ),
           myUserId: widget.myUserId,
         );

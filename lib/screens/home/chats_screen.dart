@@ -88,11 +88,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
   Future<void> _open(ConversationSummary conversation) async {
     final controller = ConversationController(
       conversationId: conversation.id,
-      api: widget.api,
+      myUserId: widget.myUserId,
+      api: widget.chat.api,
       store: widget.chat.store,
       outbox: widget.chat.outbox,
       sender: widget.chat.senderFor(widget.myUserId ?? 0),
       sync: widget.chat.sync,
+      realtime: widget.chat.realtime,
     );
     await Navigator.of(context).push(
       MaterialPageRoute(

@@ -185,9 +185,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
                       },
                     ),
             ),
+            // Above the composer, not at the top of the list. Somewhere typing is
+            // reported is about the conversation still being live, and the
+            // bottom of the screen is where a person is looking while they wait.
+            _TypingIndicator(visible: _controller.otherIsTyping),
             _Composer(
               controller: _composer,
               onSend: _send,
+              onChanged: (text) => _controller.reportTyping(text.trim().isNotEmpty),
               hint: 'Message',
             ),
           ],
@@ -657,16 +662,114 @@ class _Ticks extends StatelessWidget {
   }
 }
 
+/// Somebody is typing.
+///
+/// A row of three dots that pulses, because the alternative -- a message that has
+/// not arrived yet -- looks identical to being ignored. Sized so it appears and
+/// disappears without the composer jumping: it occupies no height when hidden,
+/// and the composer does not move when it appears.
+class _TypingIndicator extends StatefulWidget {
+  const _TypingIndicator({required this.visible});
+
+  final bool visible;
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator>
+    with SingleTickerProviderStateMixin {
+  /// Built in [initState], not as a `late final` field initialiser.
+  ///
+  /// The widget returns early when nobody is typing, so build never touches the
+  /// controller -- and a lazy initialiser first runs in `dispose`, which creates
+  /// a ticker while the element is being deactivated. Flutter throws for exactly
+  /// that, so opening a conversation where nobody is typing would crash.
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    if (widget.visible) _pulse.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(_TypingIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible == oldWidget.visible) return;
+    // Only animate while there is something to say. A ticker running for an
+    // invisible indicator is a wakeup a phone pays for on every conversation.
+    if (widget.visible) {
+      _pulse.repeat(reverse: true);
+    } else {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.visible) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 20, bottom: 4),
+      // Left, not centred. A Column aligns a minimum-width child to the middle
+      // by default, which floats the indicator in the middle of the screen
+      // instead of lining it up with the messages it is describing.
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: AnimatedBuilder(
+          animation: _pulse,
+          builder: (context, _) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.more_horiz_rounded,
+                size: 16,
+                color: scheme.primary.withValues(alpha: 0.4 + 0.4 * _pulse.value),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'typing…',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.primary.withValues(alpha: 0.7),
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
     required this.onSend,
     required this.hint,
+    this.onChanged,
   });
 
   final TextEditingController controller;
   final Future<void> Function() onSend;
   final String hint;
+
+  /// Fires on every keystroke, which is what typing notices need. The controller
+  /// throttles before it reaches the network.
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -681,6 +784,7 @@ class _Composer extends StatelessWidget {
             Expanded(
               child: TextField(
                 controller: controller,
+                onChanged: onChanged,
                 minLines: 1,
                 maxLines: 5,
                 textInputAction: TextInputAction.send,

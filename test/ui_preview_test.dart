@@ -14,6 +14,7 @@
 @Tags(['preview'])
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
@@ -27,6 +28,7 @@ import 'package:meridian/screens/home/conversation_screen.dart';
 import 'package:meridian/services/chat_environment.dart';
 import 'package:meridian/services/chat_sync.dart';
 import 'package:meridian/services/outbox.dart';
+import 'package:meridian/services/realtime_client.dart';
 import 'package:meridian/theme/app_theme.dart';
 
 import 'support/fake_chat_api.dart';
@@ -337,5 +339,47 @@ void main() {
       ),
       const Size(390, 844),
     );
+  });
+
+  testWidgets('conversation with somebody typing', (tester) async {
+    // The one part of this screen that depends on an animation running at the
+    // right moment. It returns early when nobody is typing, so the "nobody is
+    // typing" case is the one already covered by the other previews -- this is
+    // for the case where it is visible.
+    final store = InMemoryChatStore();
+    final api = FakeChatApi();
+    await store.upsertConversations([
+      const ConversationSummary(id: 1, kind: 'direct', title: 'Sam Okafor'),
+    ]);
+    await store.upsertMessages(busyConversation());
+
+    final controller = await buildController(store, api);
+    await controller.open();
+    // From somebody else: the controller ignores its own typing notices, which is
+    // the only state a user ever actually sees this in.
+    unawaited(
+      controller.debugReceive(
+        const RealtimeTyping(conversationId: 1, userId: 9, typing: true),
+      ),
+    );
+
+    tester.view.devicePixelRatio = 2.0;
+    tester.view.physicalSize = const Size(780, 1688);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: _theme(Brightness.light),
+        home: ConversationScreen(controller: controller, myUserId: me),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('preview/conversation_typing.png'),
+    );
+    controller.dispose();
   });
 }

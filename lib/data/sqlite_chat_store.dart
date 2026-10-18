@@ -274,6 +274,33 @@ class SqliteChatStore implements ChatStore, Outbox {
   }
 
   @override
+  Future<void> applyReceipt({
+    required int conversationId,
+    required int userId,
+    required int upToSeq,
+    required bool read,
+  }) async {
+    // Forward-only, expressed in the WHERE clause rather than in Dart.
+    //
+    // A delivered receipt that arrives after a read one has to be ignored, and
+    // the race is between two sockets and two devices rather than something
+    // this process can order. "Only move to delivered if it is not already read"
+    // is one predicate that is correct no matter what order they arrive in.
+    final target = read ? MessageSendState.read : MessageSendState.delivered;
+    final eligible = read
+        ? const [MessageSendState.sent, MessageSendState.delivered]
+        : const [MessageSendState.sent];
+
+    await _db.update(
+      'messages',
+      {'state': target.name},
+      where: 'conversation_id = ? AND sender_id != ? AND seq IS NOT NULL '
+          'AND seq <= ? AND state IN (${eligible.map((_) => '?').join(',')})',
+      whereArgs: [conversationId, userId, upToSeq, ...eligible.map((s) => s.name)],
+    );
+  }
+
+  @override
   Future<void> clear() async {
     final batch = _db.batch();
     batch.delete('messages');

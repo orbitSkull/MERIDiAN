@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
+import '../services/chat_environment.dart';
 import '../theme/app_theme.dart';
 import 'home/home_screen.dart';
 import 'onboarding_screen.dart';
@@ -20,6 +22,10 @@ class SessionGate extends StatefulWidget {
 
 class _SessionGateState extends State<SessionGate> {
   late Future<SessionStatus> _bootstrap = widget.auth.restoreSession();
+
+  /// The status the chat environment was last opened for, so a rebuild does not
+  /// open it twice and two statuses do not race.
+  SessionStatus? _openedFor;
 
   void _retry() {
     setState(() {
@@ -41,6 +47,29 @@ class _SessionGateState extends State<SessionGate> {
         }
 
         final status = snapshot.data!;
+
+        // Open the store and start the live socket whenever there is a session,
+        // exactly once per status. The store has to be open before any socket
+        // event can write into it, and the socket has to be started by somebody
+        // who knows there is a session -- otherwise it spends its life
+        // reconnecting to a server that will not accept it.
+        if (status != _openedFor) {
+          _openedFor = status;
+          if (status == SessionStatus.signedIn ||
+              status == SessionStatus.signedInOffline) {
+            context
+                .read<ChatEnvironmentHolder>()
+                .environment
+                .open()
+                .catchError((Object error) {
+                  // A database that will not open is fatal for chat, but not
+                  // for the app: the user can still read their profile and
+                  // change settings. Logged rather than fatal on purpose.
+                  debugPrint('Could not open the chat store: $error');
+                });
+          }
+        }
+
         return switch (status) {
           SessionStatus.signedIn ||
           SessionStatus.signedInOffline => HomeScreen(auth: widget.auth),

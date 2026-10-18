@@ -11,7 +11,6 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'api_config.dart';
-import 'api_client.dart';
 
 /// Something the server said.
 @immutable
@@ -112,6 +111,21 @@ class _ChannelSocket implements RealtimeSocket {
   Future<void> close() => _channel.sink.close();
 }
 
+/// The two things the socket needs from whoever owns the session.
+///
+/// Narrower than [ApiClient] on purpose. The socket needs a token and the
+/// ability to refresh one; it does not need the messaging endpoints, and typing it
+/// as `ApiClient` would mean every caller had to supply a fully built HTTP
+/// client -- or cast one, which throws at runtime the first time a test passes
+/// something simpler.
+abstract class RealtimeCredentials {
+  /// A usable access token, or null when nobody is signed in.
+  Future<String?> accessTokenForSocket();
+
+  /// Get a new access token. False when the session itself has gone.
+  Future<bool> tryRefresh();
+}
+
 /// Builds the socket for an endpoint.
 typedef RealtimeSocketFactory = RealtimeSocket Function(Uri uri);
 
@@ -134,7 +148,7 @@ typedef RealtimeSocketFactory = RealtimeSocket Function(Uri uri);
 /// Listening for `paused` is a refinement rather than a correctness problem.
 class RealtimeClient {
   RealtimeClient({
-    required ApiClient api,
+    required RealtimeCredentials api,
     Random? random,
     Uri? endpoint,
     RealtimeSocketFactory? connect,
@@ -149,7 +163,7 @@ class RealtimeClient {
   static RealtimeSocket _openWebSocket(Uri uri) =>
       _ChannelSocket(WebSocketChannel.connect(uri));
 
-  final ApiClient _api;
+  final RealtimeCredentials _api;
   final Random _random;
   final Uri _endpoint;
   final RealtimeSocketFactory _connect;

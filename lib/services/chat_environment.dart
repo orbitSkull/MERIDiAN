@@ -4,8 +4,10 @@ import 'package:flutter/foundation.dart';
 
 import '../data/chat_store.dart';
 import '../data/sqlite_chat_store.dart';
+import 'api_client.dart';
 import 'chat_sync.dart';
 import 'meridian_api.dart';
+import 'realtime_client.dart';
 import 'outbox.dart';
 
 /// Everything the chat screens need, built once.
@@ -22,29 +24,50 @@ class ChatEnvironment {
   /// [ChatStore] and [Outbox] over one file, with the outbox in its own table.
   ChatEnvironment._({
     required MeridianApi api,
+    required RealtimeCredentials credentials,
     required this.store,
     required this.outbox,
   }) : _api = api,
+       realtime = RealtimeClient(api: credentials),
        sync = ChatSync(api: api, store: store);
 
-  /// Production: one SQLite file serving both roles.
-  factory ChatEnvironment.production({required MeridianApi api}) {
+  /// Production: one SQLite file serving both roles, and the real client.
+  factory ChatEnvironment.production({required ApiClient api}) {
     final store = SqliteChatStore();
-    return ChatEnvironment._(api: api, store: store, outbox: store);
+    return ChatEnvironment._(
+      api: api,
+      credentials: api,
+      store: store,
+      outbox: store,
+    );
   }
 
   /// For tests, where the store and outbox are an in-memory double.
+  ///
+  /// [credentials] defaults to a stub with no token, so a test environment starts
+  /// no socket at all rather than trying to reach a server that is not there.
+  /// Tests that care about the socket pass their own.
   @visibleForTesting
   factory ChatEnvironment.forTesting({
     required MeridianApi api,
     required ChatStore store,
     required Outbox outbox,
-  }) => ChatEnvironment._(api: api, store: store, outbox: outbox);
+    RealtimeCredentials? credentials,
+  }) => ChatEnvironment._(
+    api: api,
+    credentials: credentials ?? const _NoCredentials(),
+    store: store,
+    outbox: outbox,
+  );
 
   final MeridianApi _api;
   final ChatStore store;
   final Outbox outbox;
   final ChatSync sync;
+
+  /// The live socket. Owned here rather than by a screen, so it survives
+  /// navigating between conversations and so sign-out has one place to close it.
+  final RealtimeClient realtime;
 
   /// The client the chat screens talk to.
   ///
@@ -53,7 +76,23 @@ class ChatEnvironment {
   /// the API directly, and the environment is what owns the client.
   MeridianApi get api => _api;
 
-  Future<void> open() => store.open();
+  /// Open the local store and start listening for live events.
+  ///
+  /// Both, together, because a socket writing into a store that is not open yet
+  /// is a race nobody would notice until a message went missing.
+  Future<void> open() async {
+    await store.open();
+    realtime.start();
+  }
+
+  /// Stop listening. Separate from [clear], which erases.
+  ///
+  /// They are called together on sign-out and nowhere else, but they are
+  /// different operations: closing a socket is about this device's behaviour,
+  /// wiping is about the next person's privacy.
+  Future<void> disposeRealtime() async {
+    await realtime.stop();
+  }
 
   /// An [OutboxSender] for whoever is signed in on this device.
   ///
@@ -78,6 +117,17 @@ class ChatEnvironment {
   Future<void> clear() => store.clear();
 }
 
+/// Nobody is signed in, so there is nothing to connect with.
+class _NoCredentials implements RealtimeCredentials {
+  const _NoCredentials();
+
+  @override
+  Future<String?> accessTokenForSocket() async => null;
+
+  @override
+  Future<bool> tryRefresh() async => false;
+}
+
 /// Owns the app's [ChatEnvironment] and empties it when the session ends.
 ///
 /// A holder rather than the environment itself so sign-out can rebuild it:
@@ -96,8 +146,21 @@ class ChatEnvironmentHolder extends ChangeNotifier {
   }) : _build = build ?? _defaultBuild,
        _environment = (build ?? _defaultBuild)(api);
 
-  static ChatEnvironment _defaultBuild(MeridianApi api) =>
-      ChatEnvironment.production(api: api);
+  /// The production environment, over the real API client.
+  ///
+  /// Takes [ApiClient] rather than [MeridianApi] because the socket needs a
+  /// token, and only the concrete client knows how to get and refresh one.
+  static ChatEnvironment _defaultBuild(MeridianApi api) {
+    if (api is! ApiClient) {
+      // A test passing something narrower should use `build`, and saying so
+      // beats a cast that throws three frames later during a socket connect.
+      throw ArgumentError(
+        'The default chat environment needs an ApiClient, because the live '
+        'socket needs a token. Pass build: to supply a test environment.',
+      );
+    }
+    return ChatEnvironment.production(api: api);
+  }
 
   final ChatEnvironment Function(MeridianApi api) _build;
 
@@ -107,6 +170,10 @@ class ChatEnvironmentHolder extends ChangeNotifier {
 
   /// Called when the session ends, with the client the next session will use.
   Future<void> handleSignOut(MeridianApi nextApi) async {
+    // Close the socket *before* the wipe, not after: the event stream feeds the
+    // store, so a live socket during the wipe would write somebody's messages
+    // into a database being emptied underneath it.
+    await _environment.disposeRealtime();
     await _environment.clear();
     _environment = _build(nextApi);
     notifyListeners();

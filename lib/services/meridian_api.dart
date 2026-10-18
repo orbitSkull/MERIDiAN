@@ -107,6 +107,14 @@ abstract class MeridianApi {
 
   /// Tell the server how far this device has read. Cheap and idempotent.
   Future<void> markRead(int conversationId, int upToSeq);
+
+  /// Tell the server this device holds these messages, without marking them
+  /// read.
+  ///
+  /// Separate from [markRead] because they are different claims, and because
+  /// this one is what makes the double grey tick mean anything: it is sent when
+  /// a message arrives on a socket, and the sender is told immediately.
+  Future<void> markDelivered(int conversationId, int upToSeq);
 }
 
 /// One page from [MeridianApi.messages].

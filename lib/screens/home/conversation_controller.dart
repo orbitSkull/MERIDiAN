@@ -12,6 +12,7 @@ import '../../services/api_client.dart';
 import '../../services/chat_sync.dart';
 import '../../services/meridian_api.dart';
 import '../../services/outbox.dart';
+import '../../services/realtime_client.dart';
 
 /// Drives one conversation: what is on screen, and what happens when the user
 /// types.
@@ -20,26 +21,42 @@ import '../../services/outbox.dart';
 /// never touches a widget, which is what makes the behaviour testable without a
 /// single `pumpWidget` — the interesting failures in a chat screen are ordering
 /// and state transitions, not pixels.
+///
+/// **It also listens.** Without the socket subscription below, a message arriving
+/// while somebody is looking at the conversation would be pushed by the server and
+/// dropped by the client, and the whole realtime half of the feature would be a
+/// server that talks to nobody.
 class ConversationController extends ChangeNotifier {
   ConversationController({
     required this.conversationId,
+    this.myUserId,
     required MeridianApi api,
     required ChatStore store,
     required Outbox outbox,
     required OutboxSender sender,
     required ChatSync sync,
+    RealtimeClient? realtime,
+    RealtimeApi? receipts,
   }) : _api = api,
        _store = store,
        _outbox = outbox,
        _sender = sender,
-       _sync = sync;
+       _sync = sync,
+       _realtime = realtime,
+       _receipts = receipts ?? _RestReceipts(api);
 
   final int conversationId;
+
+  /// The signed-in person, so their own typing notices are ignored rather than
+  /// shown back to them as though somebody else were writing.
+  final int? myUserId;
   final MeridianApi _api;
   final ChatStore _store;
   final Outbox _outbox;
   final OutboxSender _sender;
   final ChatSync _sync;
+  final RealtimeClient? _realtime;
+  final RealtimeApi _receipts;
 
   List<ChatMessage> _messages = const [];
   ConversationSummary? _conversation;
@@ -47,10 +64,13 @@ class ConversationController extends ChangeNotifier {
   bool _loading = true;
   bool _canLoadOlder = false;
   bool _syncing = false;
-
-  /// Set when a send has failed permanently, so the composer can explain itself
-  /// rather than the user wondering why nothing happened.
   String? _banner;
+  bool _otherIsTyping = false;
+
+  bool _disposed = false;
+
+  StreamSubscription<RealtimeEvent>? _events;
+  Timer? _typingTimeout;
 
   List<ChatMessage> get messages => _messages;
   ConversationSummary? get conversation => _conversation;
@@ -60,20 +80,110 @@ class ConversationController extends ChangeNotifier {
   bool get isSyncing => _syncing;
   String? get banner => _banner;
 
+  /// Somebody is typing in this conversation, right now.
+  ///
+  /// Goes away on its own after a few seconds: the other side may close the app
+  /// mid-word, and an indicator that stays lit forever looks broken rather than
+  /// stale.
+  bool get otherIsTyping => _otherIsTyping;
+
   bool get hasExpiredMessages => _messages.any((m) => m.expired);
-  bool get hasFailedMessages => _messages.any((m) => m.state == MessageSendState.failed);
+  bool get hasFailedMessages => _messages.any(
+    (m) => m.state == MessageSendState.failed,
+  );
   int get pendingCount => _messages.where((m) => m.isPending).length;
 
   Future<void> open() async {
+    _listen();
     _loading = true;
-    notifyListeners();
+    _notify();
     await _reload();
     _loading = false;
-    notifyListeners();
+    _notify();
 
     // Best effort: the conversation is already on screen from SQLite, so a
     // failure here is not an error to show, it is just not up to date yet.
     unawaited(refresh());
+  }
+
+  void _listen() {
+    final realtime = _realtime;
+    if (realtime == null || _events != null) return;
+
+    _events = realtime.events.listen((event) {
+      // Every handler is fire-and-forget: a socket event must never be able to
+      // block the stream, and none of these is worth awaiting inside a listener.
+      unawaited(_onRealtime(event));
+    });
+  }
+
+  Future<void> _onRealtime(RealtimeEvent event) async {
+    if (event is RealtimeMessage) {
+      await _onMessage(event.data);
+      return;
+    }
+    if (event is RealtimeReceipt) {
+      if (event.conversationId != conversationId) return;
+      await _store.applyReceipt(
+        conversationId: conversationId,
+        userId: event.userId,
+        upToSeq: event.upToSeq,
+        read: event.read,
+      );
+      await _reload();
+      _notify();
+      return;
+    }
+    if (event is RealtimeTyping) {
+      if (event.conversationId != conversationId) return;
+      if (myUserId != null && event.userId == myUserId) return;
+      _typingTimeout?.cancel();
+      if (event.typing) {
+        _otherIsTyping = true;
+        _typingTimeout = Timer(const Duration(seconds: 6), () {
+          _otherIsTyping = false;
+          _notify();
+        });
+        _notify();
+      } else if (_otherIsTyping) {
+        _otherIsTyping = false;
+        _notify();
+      }
+    }
+  }
+
+  /// A message arrived while this conversation was open.
+  Future<void> _onMessage(Map<String, dynamic> data) async {
+    final message = ChatMessage.fromJson(data);
+    if (message.conversationId != conversationId) return;
+
+    await _store.upsertMessages([message]);
+    await _reload();
+    _notify();
+
+    // Acknowledge receipt. This is the half that makes the double grey tick
+    // exist: without it the message is on the phone but the server has no idea,
+    // and the sender is told nothing until they happen to open the thread.
+    await _acknowledgeDelivery();
+  }
+
+  /// Tell the server this device holds everything up to the newest sequence.
+  ///
+  /// Up to the newest thing in the loaded page, not the whole conversation: this
+  /// runs because the conversation is open, and claiming receipt for messages
+  /// the user has not looked at is a lie that shows up as double ticks on things
+  /// they never scrolled to.
+  Future<void> _acknowledgeDelivery() async {
+    final newest = _messages
+        .map((m) => m.seq ?? 0)
+        .fold<int>(0, (a, b) => a > b ? a : b);
+    if (newest == 0) return;
+    try {
+      await _receipts.markDelivered(conversationId, newest);
+    } on ApiException {
+      // Best effort. The tick will be right after the next sync, and failing to
+      // record one is not worth interrupting anything for.
+    }
   }
 
   Future<void> _reload() async {
@@ -93,7 +203,7 @@ class ConversationController extends ChangeNotifier {
   /// Pull the server's view, and send anything queued.
   Future<void> refresh() async {
     _syncing = true;
-    notifyListeners();
+    _notify();
     try {
       await _sync.syncConversation(conversationId);
       await _sender.flush();
@@ -101,7 +211,7 @@ class ConversationController extends ChangeNotifier {
     } finally {
       _syncing = false;
       await _reload();
-      notifyListeners();
+      _notify();
     }
   }
 
@@ -114,7 +224,7 @@ class ConversationController extends ChangeNotifier {
   Future<void> loadOlder() async {
     if (_loadingOlder || _messages.isEmpty) return;
     _loadingOlder = true;
-    notifyListeners();
+    _notify();
     try {
       final oldestSeq = _messages.first.seq;
 
@@ -144,12 +254,14 @@ class ConversationController extends ChangeNotifier {
       await _reload();
     } finally {
       _loadingOlder = false;
-      notifyListeners();
+      _notify();
     }
   }
 
   Future<void> _markRead() async {
-    final newest = _messages.map((m) => m.seq ?? 0).fold<int>(0, (a, b) => a > b ? a : b);
+    final newest = _messages
+        .map((m) => m.seq ?? 0)
+        .fold<int>(0, (a, b) => a > b ? a : b);
     if (newest == 0) return;
     try {
       await _api.markRead(conversationId, newest);
@@ -164,12 +276,18 @@ class ConversationController extends ChangeNotifier {
     final trimmed = body.trim();
     if (trimmed.isEmpty) return;
     _banner = null;
+    reportTyping(false);
     await _sender.send(conversationId, trimmed);
     await _reload();
-    notifyListeners();
+    _notify();
     // Fire and forget: the send is recorded, and refresh() will pick up the
     // result when it lands.
     unawaited(refresh());
+  }
+
+  /// Tell the server this person is typing, or has stopped.
+  void reportTyping(bool typing) {
+    _realtime?.sendTyping(conversationId, typing: typing);
   }
 
   /// Try a message that failed.
@@ -196,7 +314,7 @@ class ConversationController extends ChangeNotifier {
       state: MessageSendState.sending,
     );
     await _reload();
-    notifyListeners();
+    _notify();
     unawaited(refresh());
   }
 
@@ -204,6 +322,56 @@ class ConversationController extends ChangeNotifier {
   Future<void> discard(ChatMessage message) async {
     await _outbox.abandon(message.clientId);
     await _reload();
+    _notify();
+  }
+
+  /// Feed one socket event straight in.
+  ///
+  /// For tests and previews, which have a [FakeRealtime] rather than a socket.
+  /// Public so the preview harness can put the screen into a state nobody can
+  /// reach without a second person -- somebody else typing -- and so it can be
+  /// looked at.
+  @visibleForTesting
+  Future<void> debugReceive(RealtimeEvent event) => _onRealtime(event);
+
+  /// Safe to call after [dispose].
+  ///
+  /// Not belt and braces. [open] ends with an unawaited refresh, and a user who
+  /// taps back before that finishes disposes this controller while the refresh is
+  /// still running -- which then calls notifyListeners on a dead notifier, and
+  /// Flutter throws for exactly that. On a device that is "type a message, tap
+  /// back quickly, crash", which is the most ordinary sequence in a chat app.
+  void _notify() {
+    if (_disposed) return;
     notifyListeners();
   }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _typingTimeout?.cancel();
+    unawaited(_events?.cancel());
+    _events = null;
+    super.dispose();
+  }
+}
+
+/// Just the two calls the controller needs to acknowledge receipts.
+///
+/// Narrow on purpose: the controller's job here is deciding *what* to acknowledge
+/// and *when*, and it should not need a whole API client to do it. It also keeps
+/// the controller testable without a token store and a Dio instance.
+abstract class RealtimeApi {
+  Future<void> markDelivered(int conversationId, int upToSeq);
+}
+
+/// The real thing.
+class _RestReceipts implements RealtimeApi {
+  _RestReceipts(this._api);
+
+  final MeridianApi _api;
+
+  @override
+  Future<void> markDelivered(int conversationId, int upToSeq) =>
+      _api.markDelivered(conversationId, upToSeq);
 }

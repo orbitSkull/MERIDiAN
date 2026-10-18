@@ -7,6 +7,7 @@ import '../models/settings.dart';
 import '../models/user.dart';
 import 'api_config.dart';
 import 'meridian_api.dart';
+import 'realtime_client.dart';
 import 'token_store.dart';
 
 /// Why a refresh attempt ended.
@@ -63,7 +64,7 @@ class ApiException implements Exception {
 /// Attaches the access token to every request and, on a 401, refreshes once
 /// and replays the original request. That is what lets the app start straight
 /// into the home screen on later launches instead of showing the login page.
-class ApiClient implements MeridianApi {
+class ApiClient implements MeridianApi, RealtimeCredentials {
   ApiClient({required this.tokens, Dio? dio, String? baseUrl})
     : _dio =
           dio ??
@@ -208,10 +209,12 @@ class ApiClient implements MeridianApi {
   ///
   /// Null when nobody is signed in, which the socket treats as "there is
   /// nothing to connect to" rather than as an error to retry.
+  @override
   Future<String?> accessTokenForSocket() async {
     await loadAccessToken();
     return _accessToken;
   }
+  @override
   Future<bool> tryRefresh() async {
     final result = await _refreshOnce();
     if (result.outcome != RefreshOutcome.success) return false;
@@ -588,6 +591,17 @@ class ApiClient implements MeridianApi {
       throw ApiException('Empty response opening a conversation');
     }
     return ConversationSummary.fromJson(data);
+  }
+
+  @override
+  Future<void> markDelivered(int conversationId, int upToSeq) async {
+    await loadAccessToken();
+    await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/conversations/$conversationId/delivered',
+        data: {'up_to_seq': upToSeq},
+      ),
+    );
   }
 
   @override

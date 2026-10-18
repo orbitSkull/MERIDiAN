@@ -49,6 +49,29 @@ abstract class ChatStore {
     required String reason,
   });
 
+  /// Apply somebody else's read receipt to their messages in this conversation.
+  ///
+  /// [userId] is the person whose cursor moved -- the reader -- so the messages
+  /// it applies to are the ones *they* read, which are the ones from everyone
+  /// else. Filtering on `sender_id = userId` instead would apply it to their own
+  /// messages, which is the opposite of what a receipt means.
+  ///
+  /// Forward-only: [read] moves them to read, and `delivered` moves them to
+  /// delivered only if they are not already read. A delivered receipt that
+  /// arrives after a read one -- two devices, two sockets, out of order -- must
+  /// not walk a tick backwards, because the only thing a user would see is a
+  /// blue tick turning grey while they watch.
+  ///
+  /// Only rows the server already acknowledged are touched. A message still
+  /// sending, or one that failed, has its own meaning on this device and is not
+  /// something somebody else's receipt can overwrite.
+  Future<void> applyReceipt({
+    required int conversationId,
+    required int userId,
+    required int upToSeq,
+    required bool read,
+  });
+
   /// Wipe everything. Used on sign-out: another person's messages must not be
   /// readable by whoever signs in next on the same device.
   Future<void> clear();
