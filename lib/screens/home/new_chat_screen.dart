@@ -206,7 +206,7 @@ class _NewChatScreenState extends State<NewChatScreen> {
               ),
             ),
           ),
-          const _Options(),
+          _Options(onCreateGroup: _createGroup),
           const Divider(height: 24),
           Expanded(child: _results()),
         ],
@@ -293,6 +293,343 @@ class _NewChatScreenState extends State<NewChatScreen> {
           sender: sender,
           myUserId: widget.myUserId,
         ),
+      ),
+    );
+  }
+
+  void _createGroup() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NewGroupScreen(
+          api: widget.api,
+          chat: widget.chat,
+          myUserId: widget.myUserId,
+          myUsername: widget.myUsername,
+        ),
+      ),
+    );
+  }
+}
+
+/// Create a group: a name, and at least one other person.
+///
+/// A group needs a title because a chat list full of unnamed groups is a list
+/// nobody can scan, and it needs another person because a group of one is a
+/// direct conversation that took a roundabout route to get there.
+///
+/// People are picked from the same directory search as a one-to-one chat, and
+/// a choice is kept even when the search that found it is retyped, so picking
+/// three people and then looking for a fourth does not empty the first three.
+class NewGroupScreen extends StatefulWidget {
+  const NewGroupScreen({
+    super.key,
+    required this.api,
+    required this.chat,
+    this.myUserId,
+    this.myUsername,
+  });
+
+  final MeridianApi api;
+  final ChatEnvironment chat;
+  final int? myUserId;
+  final String? myUsername;
+
+  @override
+  State<NewGroupScreen> createState() => _NewGroupScreenState();
+}
+
+class _NewGroupScreenState extends State<NewGroupScreen> {
+  static const _minQuery = 3;
+
+  /// The ceiling the server enforces, mirrored here so the button explains
+  /// itself instead of failing after the fact.
+  static const _maxMembers = 50;
+
+  final TextEditingController _title = TextEditingController();
+  final TextEditingController _query = TextEditingController();
+
+  Timer? _debounce;
+  UserSearch? _result;
+  bool _searching = false;
+  String? _error;
+
+  /// Chosen people, keyed by user id so picking the same person twice is not
+  /// possible and their row keeps its tick when the list re-renders.
+  final Map<int, DirectoryUser> _chosen = {};
+
+  bool _creating = false;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _title.dispose();
+    _query.dispose();
+    super.dispose();
+  }
+
+  String get _typed => _query.text.trim().toLowerCase();
+
+  bool get _canCreate =>
+      !_creating &&
+      _title.text.trim().isNotEmpty &&
+      _chosen.isNotEmpty &&
+      _chosen.length <= _maxMembers;
+
+  void _onQueryChanged(String _) {
+    _debounce?.cancel();
+    final typed = _typed;
+    setState(() {
+      _error = null;
+      if (typed.length < _minQuery) {
+        _result = null;
+        _searching = false;
+        return;
+      }
+      _searching = true;
+    });
+    if (typed.length < _minQuery) return;
+    _debounce = Timer(const Duration(milliseconds: 450), () => _search(typed));
+  }
+
+  Future<void> _search(String query) async {
+    try {
+      final result = await widget.api.searchUsers(query);
+      if (!mounted || _typed != query) return;
+      setState(() {
+        _result = result;
+        _searching = false;
+        _error = null;
+      });
+    } on ApiException catch (error) {
+      if (!mounted || _typed != query) return;
+      setState(() {
+        _searching = false;
+        _error = error.message;
+        _result = null;
+      });
+    }
+  }
+
+  void _toggle(DirectoryUser user) {
+    final id = user.id;
+    if (id == null) return;
+    setState(() {
+      if (_chosen.containsKey(id)) {
+        _chosen.remove(id);
+      } else if (_chosen.length < _maxMembers) {
+        _chosen[id] = user;
+      }
+    });
+  }
+
+  Future<void> _create() async {
+    if (!_canCreate) return;
+    final ids = _chosen.keys.toList();
+    setState(() => _creating = true);
+    try {
+      final conversation = await widget.api.createGroup(
+        title: _title.text.trim(),
+        memberIds: ids,
+      );
+      // Written to the store before the conversation is shown, so the chats list
+      // has it the moment the user goes back rather than after the next sync.
+      await widget.chat.store.upsertConversations([conversation]);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ConversationScreen(
+            controller: ConversationController(
+              conversationId: conversation.id,
+              myUserId: widget.myUserId,
+              api: widget.chat.api,
+              store: widget.chat.store,
+              outbox: widget.chat.outbox,
+              sender: widget.chat.senderFor(widget.myUserId ?? 0),
+              sync: widget.chat.sync,
+              realtime: widget.chat.realtime,
+            ),
+            myUserId: widget.myUserId,
+          ),
+        ),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _creating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'New Group',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: TextField(
+              controller: _title,
+              onChanged: (_) => setState(() {}),
+              textCapitalization: TextCapitalization.sentences,
+              maxLength: 80,
+              decoration: InputDecoration(
+                labelText: 'Group name',
+                hintText: 'e.g. Algorithms, Thursday',
+                prefixIcon: const Icon(Icons.group_outlined),
+                filled: true,
+                fillColor: scheme.surfaceContainerHighest.withValues(
+                  alpha: 0.5,
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: TextField(
+              controller: _query,
+              onChanged: _onQueryChanged,
+              autocorrect: false,
+              enableSuggestions: false,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9._]')),
+              ],
+              decoration: InputDecoration(
+                hintText: 'Add people by username',
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor: scheme.surfaceContainerHighest.withValues(
+                  alpha: 0.5,
+                ),
+              ),
+            ),
+          ),
+          if (_chosen.isNotEmpty)
+            _ChosenStrip(
+              chosen: _chosen.values.toList(),
+              onRemove: (user) {
+                final id = user.id;
+                if (id != null) setState(() => _chosen.remove(id));
+              },
+            ),
+          const Divider(height: 16),
+          Expanded(child: _results()),
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: FilledButton(
+            onPressed: _canCreate ? _create : null,
+            child: _creating
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2),
+                  )
+                : Text(
+                    _chosen.isEmpty
+                        ? 'Add at least one person'
+                        : 'Create group with ${_chosen.length}',
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _results() {
+    if (_error != null) {
+      return _Message(
+        icon: Icons.cloud_off_rounded,
+        title: 'Could not search',
+        detail: _error!,
+      );
+    }
+    if (_searching) {
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2.4),
+        ),
+      );
+    }
+
+    final result = _result;
+    if (result == null) {
+      return const _Message(
+        icon: Icons.group_add_outlined,
+        title: 'Name the group, then add people',
+        detail: 'Search for a username and tap to add them.',
+      );
+    }
+
+    final people = result.results
+        .where((person) => person.username != widget.myUsername)
+        .toList();
+    if (people.isEmpty) {
+      return _Message(
+        icon: Icons.person_off_outlined,
+        title: 'Nobody found',
+        detail: 'No username contains "$_typed".',
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      itemCount: people.length + (result.truncated ? 1 : 0),
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        if (index == people.length) {
+          return const _TruncatedNotice();
+        }
+        final person = people[index];
+        return _PersonTile(
+          user: person,
+          selected: person.id != null && _chosen.containsKey(person.id),
+          onTap: () => _toggle(person),
+        );
+      },
+    );
+  }
+}
+
+/// The people already picked, so a long group does not have to be scrolled back
+/// through to remember who is in it.
+class _ChosenStrip extends StatelessWidget {
+  const _ChosenStrip({required this.chosen, required this.onRemove});
+
+  final List<DirectoryUser> chosen;
+  final void Function(DirectoryUser) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: chosen.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final person = chosen[index];
+          return InputChip(
+            label: Text('@${person.username}'),
+            onDeleted: () => onRemove(person),
+            deleteIconColor: scheme.onSurfaceVariant,
+            visualDensity: VisualDensity.compact,
+          );
+        },
       ),
     );
   }
@@ -425,10 +762,17 @@ class _TruncatedNotice extends StatelessWidget {
 }
 
 class _PersonTile extends StatelessWidget {
-  const _PersonTile({required this.user, required this.onTap});
+  const _PersonTile({
+    required this.user,
+    required this.onTap,
+    this.selected = false,
+  });
 
   final DirectoryUser user;
   final VoidCallback onTap;
+
+  /// Whether this person is already in the group being built.
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -471,7 +815,11 @@ class _PersonTile extends StatelessWidget {
           ].join('  ·  '),
           style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
         ),
-        trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+        // A tick rather than a chevron, because in this screen a tap adds
+        // rather than opens, and a chevron would promise the wrong thing.
+        trailing: selected
+            ? Icon(Icons.check_circle_rounded, color: scheme.primary)
+            : const Icon(Icons.add_circle_outline_rounded, size: 20),
       ),
     );
   }
@@ -516,9 +864,11 @@ class _Message extends StatelessWidget {
   }
 }
 
-/// Group and QR, neither of which has a backend yet.
+/// Group and QR.
 class _Options extends StatelessWidget {
-  const _Options();
+  const _Options({required this.onCreateGroup});
+
+  final VoidCallback onCreateGroup;
 
   void _soon(BuildContext context, String what) {
     ScaffoldMessenger.of(
@@ -544,7 +894,7 @@ class _Options extends StatelessWidget {
             ),
             subtitle: const Text('Group with friends or class'),
             trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _soon(context, 'Groups'),
+            onTap: onCreateGroup,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
             ),

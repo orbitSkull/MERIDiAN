@@ -112,6 +112,13 @@ class InMemoryChatStore implements ChatStore, Outbox {
   }
 
   @override
+  Future<void> removeConversation(int id) async {
+    _conversations.removeWhere((c) => c.id == id);
+    _messages.removeWhere((m) => m.conversationId == id);
+    _outbox.removeWhere((_, entry) => entry.conversationId == id);
+  }
+
+  @override
   Future<void> markSent({
     required String clientId,
     required int id,

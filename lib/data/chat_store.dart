@@ -35,6 +35,13 @@ abstract class ChatStore {
 
   Future<void> upsertConversations(List<ConversationSummary> conversations);
 
+  /// Forget one conversation and its messages entirely.
+  ///
+  /// Only for leaving. Sync never deletes, because the device is the archive of
+  /// a server that keeps a sliding window -- but somebody who has walked out of
+  /// a conversation has asked for it to be gone from this device too.
+  Future<void> removeConversation(int id);
+
   /// Move a local message to its acknowledged state once the server has it.
   Future<void> markSent({
     required String clientId,

@@ -115,6 +115,71 @@ abstract class MeridianApi {
   /// this one is what makes the double grey tick mean anything: it is sent when
   /// a message arrives on a socket, and the sender is told immediately.
   Future<void> markDelivered(int conversationId, int upToSeq);
+
+  /// One conversation in full, including the member roster.
+  ///
+  /// Separate from [conversations] because the roster is only worth fetching
+  /// for the conversation actually on screen, and the list is the screen that
+  /// must not wait on it.
+  Future<ConversationSummary> conversation(int conversationId);
+
+  // ------------------------------------------------------------------
+  // groups
+
+  /// Create a group with at least one other person.
+  ///
+  /// The owner is whoever creates it; ownership cannot be transferred or sold,
+  /// so a group cannot end up with an owner nobody can replace.
+  Future<ConversationSummary> createGroup({
+    required String title,
+    required List<int> memberIds,
+  });
+
+  /// Put people into a group. Owner only.
+  ///
+  /// Already-a-member ids are ignored rather than refused, so a retried add and
+  /// a person who is already in both settle instead of raising an error dialog
+  /// about something that is not wrong.
+  Future<ConversationSummary> addMembers(
+    int conversationId,
+    List<int> userIds,
+  );
+
+  /// Leave a conversation.
+  ///
+  /// Permitted for the last person out of a direct conversation, which has no
+  /// owner to hand it to: refusing would trap anybody who ever opened one.
+  Future<void> leaveConversation(int conversationId);
+
+  /// Rename a group. Owner only.
+  Future<ConversationSummary> renameGroup(
+    int conversationId,
+    String title,
+  );
+
+  // ------------------------------------------------------------------
+  // media
+
+  /// Store a file and get back an id, without attaching it to anything yet.
+  ///
+  /// Uploaded first and attached later, so that picking four photographs and
+  /// sending one does not leave three rows behind forever.
+  Future<MediaUpload> uploadMedia({
+    required List<int> bytes,
+    required String mime,
+    String filename,
+  });
+
+  /// Bind a stored file to a message that already exists.
+  Future<void> attachMedia({
+    required int mediaId,
+    required int messageId,
+    required int conversationId,
+  });
+
+  /// A short-lived link to a file, after checking the viewer is in the
+  /// conversation the file belongs to.
+  Future<MediaLink> mediaLink(int mediaId);
 }
 
 /// One page from [MeridianApi.messages].

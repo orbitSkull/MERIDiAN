@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../data/chat_models.dart';
 import '../../data/chat_store.dart';
+import '../../data/media_cache.dart';
 import '../../services/api_client.dart';
 import '../../services/chat_sync.dart';
 import '../../services/meridian_api.dart';
@@ -46,6 +47,19 @@ class ConversationController extends ChangeNotifier {
        _receipts = receipts ?? _RestReceipts(api);
 
   final int conversationId;
+
+  /// Links to this conversation's files, remembered until they lapse.
+  ///
+  /// Per conversation rather than global, so opening one chat and closing it
+  /// drops its links and the memory with them.
+  late final MediaCache media = MediaCache(_api);
+
+  /// The API, for the group screen's directory search.
+  ///
+  /// Exposed narrowly rather than by making the screen own its own client: a
+  /// second client would be a second token store and a second idea about who is
+  /// signed in.
+  MeridianApi get apiForGroups => _api;
 
   /// The signed-in person, so their own typing notices are ignored rather than
   /// shown back to them as though somebody else were writing.
@@ -288,6 +302,57 @@ class ConversationController extends ChangeNotifier {
   /// Tell the server this person is typing, or has stopped.
   void reportTyping(bool typing) {
     _realtime?.sendTyping(conversationId, typing: typing);
+  }
+
+  // ------------------------------------------------------------------
+  // groups
+
+  /// Who is in this conversation.
+  ///
+  /// Returns null when the caller is no longer a member, which happens for a
+  /// real reason: somebody removed them, or they were the one who left and is
+  /// still looking at the screen they left from. Both are handled by leaving the
+  /// conversation rather than by showing an empty member list.
+  Future<List<ConversationMember>?> loadMembers() async {
+    try {
+      final conversation = await _api.conversation(conversationId);
+      _conversation = conversation;
+      _notify();
+      return conversation.members;
+    } on ApiException catch (error) {
+      // 404 and 403 both mean the same thing here: you are not in this room any
+      // more. Anything else is worth leaving the roster alone for, rather than
+      // replacing a good list with an error.
+      if (error.statusCode == 404 || error.statusCode == 403) return null;
+      rethrow;
+    }
+  }
+
+  /// Put people into a group. Owner only.
+  Future<void> addMembers(List<int> userIds) async {
+    final conversation = await _api.addMembers(conversationId, userIds);
+    _conversation = conversation;
+    _notify();
+  }
+
+  /// Rename a group. Owner only.
+  Future<void> rename(String title) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return;
+    final conversation = await _api.renameGroup(conversationId, trimmed);
+    _conversation = conversation;
+    _notify();
+  }
+
+  /// Walk out of a conversation.
+  ///
+  /// The conversation is dropped from the store first and the server told
+  /// afterwards. A leave that failed halfway should leave the chat gone from
+  /// this device rather than leaving a conversation the person cannot send to
+  /// and cannot tell apart from a broken one.
+  Future<void> leave() async {
+    await _store.removeConversation(conversationId);
+    await _api.leaveConversation(conversationId);
   }
 
   /// Try a message that failed.

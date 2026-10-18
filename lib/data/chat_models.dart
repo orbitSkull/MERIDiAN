@@ -168,6 +168,46 @@ class ChatMessage {
   }
 }
 
+/// One person in a conversation.
+class ConversationMember {
+  const ConversationMember({
+    required this.userId,
+    required this.username,
+    this.displayName,
+    this.role = 'member',
+  });
+
+  final int userId;
+  final String username;
+  final String? displayName;
+
+  /// `owner` or `member`. Only meaningful for groups; a direct conversation has
+  /// no owner to speak of, which is exactly why anybody can leave one.
+  final String role;
+
+  bool get isOwner => role == 'owner';
+
+  /// What to put in a list row.
+  ///
+  /// Display name first because that is what a person chose to be called, with
+  /// the handle as the fallback for somebody who never set one rather than
+  /// showing an empty row.
+  String get label {
+    final name = displayName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    return '@$username';
+  }
+
+  factory ConversationMember.fromJson(Map<String, dynamic> json) {
+    return ConversationMember(
+      userId: json['user_id'] as int,
+      username: (json['username'] as String?) ?? '',
+      displayName: json['display_name'] as String?,
+      role: (json['role'] as String?) ?? 'member',
+    );
+  }
+}
+
 /// A conversation as the message list shows it.
 class ConversationSummary {
   const ConversationSummary({
@@ -179,6 +219,7 @@ class ConversationSummary {
     this.lastMessageAt,
     this.unreadCount = 0,
     this.preview,
+    this.members = const [],
   });
 
   final int id;
@@ -193,6 +234,24 @@ class ConversationSummary {
   final int lastSeq;
   final DateTime? lastMessageAt;
   final int unreadCount;
+
+  /// Members as the server last reported them.
+  ///
+  /// Empty in the list response, which is not an oversight: reading every
+  /// conversation's roster on every launch is a round trip and a rendering pass
+  /// for a screen that shows one row per chat. The conversation screen fetches
+  /// the single conversation it is showing and gets the full roster then.
+  final List<ConversationMember> members;
+
+  bool get isGroup => kind == 'group';
+
+  /// The owner, or null for a direct conversation or a roster not yet fetched.
+  ConversationMember? get owner {
+    for (final member in members) {
+      if (member.isOwner) return member;
+    }
+    return null;
+  }
 
   /// Last message body, or a placeholder description of it. Null in a
   /// conversation whose only message has expired, which is a different thing
@@ -218,6 +277,10 @@ class ConversationSummary {
           : DateTime.parse(json['last_message_at'] as String),
       unreadCount: unread is int ? unread : 0,
       preview: json['preview'] as String?,
+      members: ((json['members'] as List<dynamic>?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ConversationMember.fromJson)
+          .toList(),
     );
   }
 }
@@ -268,5 +331,62 @@ class OutboxEntry {
     if (attempts <= 0) return Duration.zero;
     final seconds = 5 * (1 << (attempts - 1).clamp(0, 10));
     return Duration(seconds: seconds.clamp(0, 300));
+  }
+}
+/// A file the server has stored, not yet attached to anything.
+///
+/// The reply deliberately carries no path to the bytes. The stored key is an
+/// internal pointer, and handing it to a client would mean the only thing
+/// between somebody's photograph and a reader is a bucket that stays private.
+/// Downloads go through an endpoint that checks the viewer is in the
+/// conversation, so the client never needs it.
+class MediaUpload {
+  const MediaUpload({
+    required this.id,
+    required this.kind,
+    required this.mime,
+    required this.byteSize,
+    required this.expiresAt,
+  });
+
+  final int id;
+  final String kind;
+  final String mime;
+  final int byteSize;
+
+  /// When the server stops being able to serve this.
+  ///
+  /// Shown to the user rather than kept quiet, because "why has this photo
+  /// gone" is a question a chat app has to be able to answer.
+  final DateTime expiresAt;
+
+  factory MediaUpload.fromJson(Map<String, dynamic> json) {
+    return MediaUpload(
+      id: json['id'] as int,
+      kind: (json['kind'] as String?) ?? 'image',
+      mime: (json['mime'] as String?) ?? '',
+      byteSize: (json['byte_size'] as int?) ?? 0,
+      expiresAt: DateTime.parse(json['expires_at'] as String),
+    );
+  }
+}
+
+/// A short-lived link to somebody's file, issued only after a membership check.
+class MediaLink {
+  const MediaLink({required this.url, required this.expiresInSeconds});
+
+  final String url;
+
+  /// How long this link stays good for.
+  ///
+  /// Kept so the image cache can drop the entry when it lapses instead of
+  /// holding a link that stopped working and a file nobody may fetch.
+  final int expiresInSeconds;
+
+  factory MediaLink.fromJson(Map<String, dynamic> json) {
+    return MediaLink(
+      url: json['url'] as String,
+      expiresInSeconds: (json['expires_in_seconds'] as int?) ?? 300,
+    );
   }
 }

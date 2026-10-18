@@ -301,6 +301,22 @@ class SqliteChatStore implements ChatStore, Outbox {
   }
 
   @override
+  Future<void> removeConversation(int id) async {
+    final batch = _db.batch();
+    // The messages go too, unlike on a sync.
+    //
+    // Sync never deletes, because the server's history is a sliding window and
+    // the device is the archive. Leaving is different: the person has said they
+    // are no longer in this conversation, and leaving its history sitting in a
+    // table is not an archive, it is a conversation they cannot open and cannot
+    // get rid of.
+    batch.delete('messages', where: 'conversation_id = ?', whereArgs: [id]);
+    batch.delete('conversations', where: 'id = ?', whereArgs: [id]);
+    batch.delete('outbox', where: 'conversation_id = ?', whereArgs: [id]);
+    await batch.commit(noResult: true);
+  }
+
+  @override
   Future<void> clear() async {
     final batch = _db.batch();
     batch.delete('messages');

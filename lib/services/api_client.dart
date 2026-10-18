@@ -615,6 +615,145 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
     );
   }
 
+  @override
+  Future<ConversationSummary> conversation(int conversationId) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>('/conversations/$conversationId'),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response loading a conversation');
+    }
+    return ConversationSummary.fromJson(data);
+  }
+
+  // ------------------------------------------------------------------
+  // groups
+
+  @override
+  Future<ConversationSummary> createGroup({
+    required String title,
+    required List<int> memberIds,
+  }) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/conversations/group',
+        // Repeated query parameters rather than a JSON body, because the
+        // endpoint was specified that way. The helper sends a list as one
+        // `member_ids` per value, which is what FastAPI binds to list[int].
+        queryParameters: {'title': title, 'member_ids': memberIds},
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response creating a group');
+    }
+    return ConversationSummary.fromJson(data);
+  }
+
+  @override
+  Future<ConversationSummary> addMembers(
+    int conversationId,
+    List<int> userIds,
+  ) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/conversations/$conversationId/members',
+        data: {'user_ids': userIds},
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response adding people to a group');
+    }
+    return ConversationSummary.fromJson(data);
+  }
+
+  @override
+  Future<void> leaveConversation(int conversationId) async {
+    await loadAccessToken();
+    await _guard(
+      () => _dio.delete<void>('/conversations/$conversationId/members/me'),
+    );
+  }
+
+  @override
+  Future<ConversationSummary> renameGroup(
+    int conversationId,
+    String title,
+  ) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.patch<Map<String, dynamic>>(
+        '/conversations/$conversationId',
+        data: {'title': title},
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response renaming a group');
+    }
+    return ConversationSummary.fromJson(data);
+  }
+
+  // ------------------------------------------------------------------
+  // media
+
+  @override
+  Future<MediaUpload> uploadMedia({
+    required List<int> bytes,
+    required String mime,
+    String filename = 'upload',
+  }) async {
+    await loadAccessToken();
+    final form = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes, filename: filename),
+    });
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/media',
+        data: form,
+        options: Options(contentType: 'multipart/form-data'),
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response uploading a file');
+    }
+    return MediaUpload.fromJson(data);
+  }
+
+  @override
+  Future<void> attachMedia({
+    required int mediaId,
+    required int messageId,
+    required int conversationId,
+  }) async {
+    await loadAccessToken();
+    await _guard(
+      () => _dio.post<void>(
+        '/media/$mediaId/attach',
+        data: {'message_id': messageId, 'conversation_id': conversationId},
+      ),
+    );
+  }
+
+  @override
+  Future<MediaLink> mediaLink(int mediaId) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>('/media/$mediaId'),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response asking for a file');
+    }
+    return MediaLink.fromJson(data);
+  }
+
   /// GET a JSON object from the API.
   ///
   /// Exposed for endpoints that are not tied to a model, such as username

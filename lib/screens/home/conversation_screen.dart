@@ -1,6 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../data/chat_models.dart';
+import '../../data/media_cache.dart';
+import '../../models/settings.dart';
+import '../../services/api_client.dart';
+import '../../services/meridian_api.dart';
 import 'conversation_controller.dart';
 
 /// One conversation.
@@ -91,9 +97,36 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final scheme = Theme.of(context).colorScheme;
     final title = _controller.conversation?.title ?? 'Chat';
 
+    final isGroup = _controller.conversation?.isGroup ?? false;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        // Tappable for a group, because a group's header is the only place the
+        // roster and the owner's controls live. A direct conversation has
+        // neither, so it stays inert rather than opening an empty screen.
+        title: isGroup
+            ? InkWell(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => GroupInfoScreen(
+                      controller: _controller,
+                      api: _controller.apiForGroups,
+                      myUserId: widget.myUserId,
+                    ),
+                  ),
+                ),
+                borderRadius: BorderRadius.circular(8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(child: Text(title, overflow: TextOverflow.ellipsis)),
+                    const SizedBox(width: 4),
+                    Icon(Icons.info_outline_rounded,
+                        size: 18, color: scheme.onSurfaceVariant),
+                  ],
+                ),
+              )
+            : Text(title),
         actions: [
           if (_controller.isSyncing)
             const Padding(
@@ -175,6 +208,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
                         return _Bubble(
                           message: messages[position],
                           mine: widget.myUserId == messages[position].senderId,
+                          media: _controller.media,
                           // Only the last message of a run carries a time and a
                           // tail. A timestamp on every bubble turns a
                           // conversation into a column of clocks.
@@ -417,16 +451,639 @@ class _DayDivider extends StatelessWidget {
   }
 }
 
+/// One photograph in a bubble.
+///
+/// Renders nothing but a framed space until the link comes back, because a
+/// bubble that grows from a line to a photograph as the image arrives makes the
+/// whole conversation jump under the reader's thumb. The space is reserved at
+/// the shape a chat photo is drawn, so the layout settles once and stays put.
+/// Opens one photograph full screen.
+///
+/// A plain function rather than a method: it needs nothing from the screen that
+/// called it, and a bubble that had to reach back up into the screen's state to
+/// show a picture is a bubble that cannot be built in a preview.
+void _openViewer(BuildContext context, ChatMessage message, String url) {
+  Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => _PhotoViewer(url: url, message: message)),
+  );
+}
+
+class _AttachmentImage extends StatefulWidget {
+  const _AttachmentImage({
+    required this.mediaId,
+    required this.cache,
+    required this.onOpen,
+  });
+
+  final int mediaId;
+  final MediaCache? cache;
+  final void Function(String url) onOpen;
+
+  @override
+  State<_AttachmentImage> createState() => _AttachmentImageState();
+}
+
+class _AttachmentImageState extends State<_AttachmentImage> {
+  String? _url;
+
+  /// Set when the server declined, as distinct from "not yet": without the
+  /// distinction a refusal would be indistinguishable from slow, and the
+  /// placeholder would spin forever on a file that is gone.
+  bool _refused = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(_AttachmentImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mediaId != widget.mediaId) {
+      _url = null;
+      _refused = false;
+      _resolve();
+    }
+  }
+
+  Future<void> _resolve() async {
+    final cache = widget.cache;
+    if (cache == null) {
+      // A preview with no server. Not a failure, just nothing to show.
+      if (mounted) setState(() => _refused = true);
+      return;
+    }
+    final url = await cache.urlFor(widget.mediaId);
+    if (!mounted) return;
+    setState(() {
+      _url = url;
+      _refused = url == null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    if (_refused) {
+      // Said plainly rather than as a broken-image glyph, because the honest
+      // answer is that it has expired and a person can act on that.
+      return Container(
+        width: 190,
+        height: 120,
+        margin: const EdgeInsets.only(bottom: 6),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.image_not_supported_outlined,
+                color: scheme.onSurfaceVariant,
+                size: 22,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Photo unavailable',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(
+          children: [
+            // Sized before the bytes exist so the bubble does not resize under
+            // the reader when they do.
+            Container(width: 190, height: 140, color: scheme.surfaceContainerHighest),
+            if (_url != null)
+              GestureDetector(
+                onTap: () => widget.onOpen(_url!),
+                child: Image.network(
+                  _url!,
+                  width: 190,
+                  height: 140,
+                  // Cover, so a very tall photograph is cropped rather than
+                  // shrunk to a thumbnail the size of a stamp.
+                  fit: BoxFit.cover,
+                  // The cache already remembers the link; this stops a rebuild
+                  // from re-decoding the same bitmap for a different URL.
+                  filterQuality: FilterQuality.medium,
+                  errorBuilder: (context, error, stack) => const SizedBox(
+                    width: 190,
+                    height: 140,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen view of one photograph.
+class _PhotoViewer extends StatelessWidget {
+  const _PhotoViewer({required this.url, required this.message});
+
+  final String url;
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        title: Text(
+          _formatTime(message.createdAt),
+          style: const TextStyle(color: Colors.white),
+        ),
+      ),
+      extendBodyBehindAppBar: true,
+      body: Center(
+        // InteractiveViewer rather than a fixed fit, because the one thing
+        // somebody opens a photograph to do is look closely at part of it.
+        child: InteractiveViewer(
+          maxScale: 5,
+          child: Image.network(
+            url,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stack) => const Center(
+              child: Text(
+                'This photo is no longer available.',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Who is in this group, and what the owner may do about it.
+///
+/// Opened from a group's header. Direct conversations have no roster worth
+/// showing and no owner, so they do not get this screen at all rather than
+/// getting one with everything on it disabled.
+class GroupInfoScreen extends StatefulWidget {
+  const GroupInfoScreen({
+    super.key,
+    required this.controller,
+    required this.api,
+    required this.myUserId,
+  });
+
+  final ConversationController controller;
+  final MeridianApi api;
+  final int? myUserId;
+
+  @override
+  State<GroupInfoScreen> createState() => _GroupInfoScreenState();
+}
+
+class _GroupInfoScreenState extends State<GroupInfoScreen> {
+  List<ConversationMember>? _members;
+  bool _loading = true;
+  bool _busy = false;
+
+  /// Set when the person is no longer in the conversation.
+  bool _gone = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final members = await widget.controller.loadMembers();
+      if (!mounted) return;
+      setState(() {
+        _members = members;
+        _loading = false;
+        // Null means the server says you are not a member. Removed, or you
+        // left and something went wrong coming back -- either way this screen
+        // has nothing true to show, so it closes rather than pretending.
+        _gone = members == null;
+      });
+      if (_gone) Navigator.of(context).maybePop();
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  bool get _isOwner =>
+      widget.myUserId != null &&
+      (_members?.any((m) => m.userId == widget.myUserId && m.isOwner) ??
+          false);
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() => _busy = true);
+    try {
+      await action();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _rename() async {
+    final current = widget.controller.conversation?.title ?? '';
+    final text = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameDialog(initial: current),
+    );
+    if (text == null || text.trim().isEmpty) return;
+    await _run(() => widget.controller.rename(text));
+    await _load();
+  }
+
+  Future<void> _addMembers() async {
+    final picked = await Navigator.of(context).push<List<DirectoryUser>>(
+      MaterialPageRoute(
+        builder: (_) => _AddPeopleScreen(
+          api: widget.api,
+          exclude: (_members ?? const <ConversationMember>[])
+              .map((m) => m.userId)
+              .toSet(),
+          me: widget.myUserId,
+        ),
+      ),
+    );
+    if (picked == null || picked.isEmpty || !mounted) return;
+    final ids = picked.map((u) => u.id).whereType<int>().toList();
+    if (ids.isEmpty) return;
+    await _run(() => widget.controller.addMembers(ids));
+    await _load();
+  }
+
+  Future<void> _leave() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Leave this group?'),
+        content: const Text(
+          'You will stop receiving its messages. Whoever added you can add you '
+          'back.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Stay'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    await _run(() async {
+      await widget.controller.leave();
+      if (mounted) {
+        // Two pops: this screen, then the conversation that is no longer there.
+        Navigator.of(context).pop();
+        Navigator.of(context).maybePop();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final title = widget.controller.conversation?.title ?? 'Group';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Group info',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ),
+                      if (_isOwner)
+                        IconButton(
+                          tooltip: 'Rename',
+                          onPressed: _busy ? null : _rename,
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    '${_members?.length ?? 0} members',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                if (_isOwner)
+                  ListTile(
+                    leading: Icon(Icons.person_add_alt_1_outlined,
+                        color: scheme.primary),
+                    title: const Text('Add people'),
+                    onTap: _busy ? null : _addMembers,
+                  ),
+                const Divider(),
+                for (final member in _members ?? const <ConversationMember>[])
+                  ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: scheme.primary.withValues(alpha: 0.14),
+                      child: Text(
+                        _initials(member.label),
+                        style: TextStyle(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    title: Text(member.label),
+                    subtitle: Text('@${member.username}'),
+                    // The owner is labelled rather than given a control that
+                    // removes them: there is no way to hand a group on, so
+                    // showing a button that could not do anything would be a lie.
+                    trailing: member.isOwner
+                        ? const Chip(label: Text('Owner'))
+                        : null,
+                  ),
+                const Divider(),
+                ListTile(
+                  leading: Icon(Icons.logout_rounded, color: scheme.error),
+                  title: Text(
+                    'Leave group',
+                    style: TextStyle(color: scheme.error),
+                  ),
+                  onTap: _busy ? null : _leave,
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
+    );
+  }
+
+  static String _initials(String label) {
+    final parts = label
+        .replaceAll('@', '')
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .take(2);
+    if (parts.isEmpty) return '?';
+    return parts.map((p) => p[0].toUpperCase()).join();
+  }
+}
+
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _text = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rename group'),
+      content: TextField(
+        controller: _text,
+        autofocus: true,
+        maxLength: 80,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(labelText: 'Group name'),
+        onSubmitted: (value) => Navigator.of(context).pop(value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_text.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Pick people to add, minus those already in.
+///
+/// Shares the directory search with the new-chat screens rather than inventing
+/// its own: two search implementations in one app is how they drift apart and
+/// one of them ends up rating a query differently.
+class _AddPeopleScreen extends StatefulWidget {
+  const _AddPeopleScreen({
+    required this.api,
+    required this.exclude,
+    required this.me,
+  });
+
+  final MeridianApi api;
+
+  /// User ids already in the group, which cannot be added again.
+  final Set<int> exclude;
+
+  final int? me;
+
+  @override
+  State<_AddPeopleScreen> createState() => _AddPeopleScreenState();
+}
+
+class _AddPeopleScreenState extends State<_AddPeopleScreen> {
+  static const _minQuery = 3;
+
+  final TextEditingController _query = TextEditingController();
+  final Map<int, DirectoryUser> _picked = {};
+
+  Timer? _debounce;
+  UserSearch? _result;
+  bool _searching = false;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _query.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String _) {
+    _debounce?.cancel();
+    final typed = _query.text.trim().toLowerCase();
+    setState(() {
+      if (typed.length < _minQuery) {
+        _result = null;
+        _searching = false;
+        return;
+      }
+      _searching = true;
+    });
+    if (typed.length < _minQuery) return;
+    _debounce = Timer(const Duration(milliseconds: 450), () => _search(typed));
+  }
+
+  Future<void> _search(String query) async {
+    try {
+      final result = await widget.api.searchUsers(query);
+      if (!mounted || _query.text.trim().toLowerCase() != query) return;
+      setState(() {
+        _result = result;
+        _searching = false;
+      });
+    } on ApiException {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _result = null;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Add people'),
+        actions: [
+          if (_picked.isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(_picked.values.toList()),
+              child: Text('Add ${_picked.length}'),
+            ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: TextField(
+              controller: _query,
+              onChanged: _onChanged,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(
+                hintText: 'Search by username',
+                prefixIcon: Icon(Icons.search_rounded),
+              ),
+            ),
+          ),
+          Expanded(child: _results()),
+        ],
+      ),
+    );
+  }
+
+  Widget _results() {
+    if (_searching) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final result = _result;
+    if (result == null) {
+      return const Center(child: Text('Search for somebody to add.'));
+    }
+    final people = result.results
+        .where(
+          (p) =>
+              p.id != null &&
+              p.id != widget.me &&
+              !widget.exclude.contains(p.id) &&
+              !_picked.containsKey(p.id),
+        )
+        .toList();
+    if (people.isEmpty) {
+      return const Center(child: Text('Nobody here to add.'));
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      itemCount: people.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final person = people[index];
+        return Card(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+          child: ListTile(
+            title: Text(person.fullName),
+            subtitle: Text('@${person.username}'),
+            trailing: const Icon(Icons.add_circle_outline_rounded),
+            onTap: () => setState(() => _picked[person.id!] = person),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _Bubble extends StatelessWidget {
   const _Bubble({
     required this.message,
     required this.mine,
     this.showTimestamp = true,
     this.continued = false,
+    this.media,
   });
 
   final ChatMessage message;
   final bool mine;
+
+  /// Where short-lived links come from. Null in a preview that has no API to
+  /// ask, in which case the image area simply shows its placeholder.
+  final MediaCache? media;
 
   /// Whether this message closes a run, and so is the one that carries a time
   /// and the pointed corner.
@@ -481,8 +1138,16 @@ class _Bubble extends StatelessWidget {
                 text: 'This message has expired',
                 color: foreground,
               )
-            else
-              Text(message.body, style: TextStyle(color: foreground)),
+            else ...[
+              if (message.attachmentId != null && !message.attachmentExpired)
+                _AttachmentImage(
+                  mediaId: message.attachmentId!,
+                  cache: media,
+                  onOpen: (url) => _openViewer(context, message, url),
+                ),
+              if (message.body.isNotEmpty)
+                Text(message.body, style: TextStyle(color: foreground)),
+            ],
             if (message.attachmentExpired)
               _Notice(
                 icon: Icons.image_not_supported_outlined,
