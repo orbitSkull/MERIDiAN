@@ -2,6 +2,13 @@ plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    // Turn google-services.json into the values firebase_core reads at runtime.
+    //
+    // This plugin FAILS THE BUILD if the file is missing, which is deliberate and
+    // worth knowing about: until the Firebase project exists, `flutter build apk`
+    // stops here with a message naming the file. `flutter analyze` and
+    // `flutter test` are unaffected, so the rest of the app stays verifiable.
+    id("com.google.gms.google-services")
 }
 
 android {

@@ -750,6 +750,37 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
   }
 
   @override
+  Future<DeviceRegistration> registerDevice({
+    required String pushToken,
+    required String platform,
+  }) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/devices',
+        data: {'push_token': pushToken, 'platform': platform},
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response registering this device');
+    }
+    return DeviceRegistration.fromJson(data);
+  }
+
+  @override
+  Future<void> markDeviceSeen(int deviceId) async {
+    await loadAccessToken();
+    await _guard(() => _dio.post<void>('/devices/$deviceId/seen'));
+  }
+
+  @override
+  Future<void> deleteDevice(int deviceId) async {
+    await loadAccessToken();
+    await _guard(() => _dio.delete<void>('/devices/$deviceId'));
+  }
+
+  @override
   Future<MediaLink> mediaLink(int mediaId) async {
     await loadAccessToken();
     final response = await _guard(

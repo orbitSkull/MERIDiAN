@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 
 import '../../data/chat_models.dart';
 import '../../data/media_cache.dart';
 import '../../models/settings.dart';
 import '../../services/api_client.dart';
 import '../../services/meridian_api.dart';
+import '../../services/push_registration.dart';
 import 'conversation_controller.dart';
 
 /// One conversation.
@@ -54,6 +56,25 @@ class _ConversationScreenState extends State<ConversationScreen> {
     // was unreachable no matter how far up they dragged.
     _scroll.addListener(_loadOlderWhenAtTop);
     _controller.open();
+    // Housekeeping, not the screen's job, but this is where it belongs: opening
+    // a conversation is proof the phone is in use, and without telling the server
+    // so, the pruning job eventually deletes the device somebody is holding --
+    // which works perfectly right up until they background the app for a week.
+    unawaited(_pushOf(context)?.markSeen());
+  }
+
+  /// The push registration, when this screen is running under the app's
+  /// providers.
+  ///
+  /// Null rather than an exception when it is absent, because a widget test that
+  /// builds a conversation on its own has no business failing over a side effect
+  /// it never asked for.
+  static PushRegistration? _pushOf(BuildContext context) {
+    try {
+      return Provider.of<PushRegistration>(context, listen: false);
+    } on ProviderNotFoundException {
+      return null;
+    }
   }
 
   @override

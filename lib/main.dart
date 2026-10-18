@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'screens/session_gate.dart';
 import 'services/auth_service.dart';
 import 'services/chat_environment.dart';
+import 'services/push_registration.dart';
+import 'services/push_service.dart';
 import 'services/settings_store.dart';
 import 'theme/app_theme.dart';
 
@@ -50,6 +52,21 @@ class MeridianApp extends StatelessWidget {
         // Above MaterialApp so every chat screen below can reach the store,
         // and so sign-out has one place to wipe another person's messages.
         ChangeNotifierProvider<ChatEnvironmentHolder>.value(value: chat),
+        // Push registration follows the session for the same reason: a Firebase
+        // token survives a sign-out, so without this a sold phone would keep
+        // telling the next owner about the previous owner's messages.
+        //
+        // Seeded with the real service here rather than inside the widget,
+        // because main is the one place that is allowed to touch Firebase.
+        ChangeNotifierProxyProvider<AuthService, PushRegistration>(
+          create: (_) => PushRegistration(
+            service: FcmPushService(api: auth.api),
+          ),
+          update: (_, auth, push) {
+            push!.bindApi(auth.isSignedIn ? auth.api : null);
+            return push;
+          },
+        ),
         // A proxy rather than a plain provider, because preferences only sync
         // while somebody is signed in. This is where the store learns about the
         // session: attached on sign-in, detached on sign-out, so a toggle

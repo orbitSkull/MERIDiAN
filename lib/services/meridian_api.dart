@@ -178,6 +178,25 @@ abstract class MeridianApi {
     required int conversationId,
   });
 
+  // ------------------------------------------------------------------
+  // devices
+
+  /// Tell the server which handset to ring.
+  ///
+  /// Registering the same token again is not an error and returns the same
+  /// device. This is called on every launch, and refusing the second one would
+  /// mean the client had to keep an id that does not survive an app update.
+  Future<DeviceRegistration> registerDevice({
+    required String pushToken,
+    required String platform,
+  });
+
+  /// Tell the server this device is alive, so it is not pruned as unused.
+  Future<void> markDeviceSeen(int deviceId);
+
+  /// Stop sending notifications to this device, and forget its token.
+  Future<void> deleteDevice(int deviceId);
+
   /// A short-lived link to a file, after checking the viewer is in the
   /// conversation the file belongs to.
   Future<MediaLink> mediaLink(int mediaId);
@@ -200,4 +219,29 @@ class ChatPage {
   /// the database and sequence numbers by the conversation, so a device can ask
   /// "what is newer than this position" and be answered without scanning.
   final int newestSeq;
+}
+
+/// A phone the account has registered for notifications.
+///
+/// Carries no token: the client registered it and already has it, and a token
+/// echoed into a settings screen or a bug report is a credential for making
+/// somebody's phone ring.
+class DeviceRegistration {
+  const DeviceRegistration({
+    required this.id,
+    required this.platform,
+    this.pushEnabled = true,
+  });
+
+  final int id;
+  final String platform;
+  final bool pushEnabled;
+
+  factory DeviceRegistration.fromJson(Map<String, dynamic> json) {
+    return DeviceRegistration(
+      id: json['id'] as int,
+      platform: (json['platform'] as String?) ?? 'android',
+      pushEnabled: (json['push_enabled'] as bool?) ?? true,
+    );
+  }
 }

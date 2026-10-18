@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The accent colour a notification is tinted with in the status bar.
+
+  Referenced from AndroidManifest.xml as
+  com.google.firebase.messaging.default_notification_color. Without it FCM falls
+  back to the launcher icon's dominant colour, which for this icon is a
+  different blue entirely, so the status bar and the app would not match.
+-->
+<resources>
+    <color name="notification_accent">#4F46E5</color>
+</resources>
