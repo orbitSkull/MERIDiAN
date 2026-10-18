@@ -13,12 +13,14 @@ import 'package:meridian/services/api_client.dart';
 import 'package:meridian/services/meridian_api.dart';
 import 'package:meridian/services/settings_store.dart';
 
+import 'support/stub_meridian_api.dart';
+
 /// Scriptable [MeridianApi] for widget tests.
 ///
 /// Lets a test decide what the screen will be told, including failures, so the
 /// interesting paths -- a rejected save, an unreachable server, a device with
 /// no label -- can be driven without a server.
-class ScriptedApi implements MeridianApi {
+class ScriptedApi extends StubMeridianApi {
   UserProfile profile = _profile();
   List<DeviceSession> storedSessions = const [];
   List<BlockedUser> storedBlocked = const [];

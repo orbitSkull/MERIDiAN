@@ -126,6 +126,46 @@ class ChatMessage {
       failureReason: clearFailure ? null : (failureReason ?? this.failureReason),
     );
   }
+
+  /// Build from the server's message object.
+  ///
+  /// Written to fail loudly on the fields the device cannot do without —
+  /// `client_id`, `seq`, `sender_id` — rather than to default them. A missing
+  /// conversation_id would otherwise put a message in a conversation that does
+  /// not exist, where nothing can ever display it, and the symptom is a chat
+  /// that silently does not update.
+  ///
+  /// The optional ones are the ones the server may legitimately omit or null:
+  /// an expired message has no body to send, and `attachment_id` is absent for
+  /// a message with nothing attached.
+  factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final delivery = json['delivery'];
+    final deliveryMap = delivery is Map<String, dynamic> ? delivery : const <String, dynamic>{};
+
+    return ChatMessage(
+      id: json['id'] as int?,
+      conversationId: json['conversation_id'] as int,
+      clientId: json['client_id'] as String,
+      seq: json['seq'] as int?,
+      body: (json['body'] as String?) ?? '',
+      kind: (json['kind'] as String?) ?? 'text',
+      senderId: json['sender_id'] as int,
+      createdAt: DateTime.parse(json['created_at'] as String),
+      expiresAt: json['expires_at'] == null
+          ? null
+          : DateTime.parse(json['expires_at'] as String),
+      attachmentId: json['attachment_id'] as int?,
+      // Absent on older payloads, which is a server that predates the field
+      // rather than an unexpired message, and false is the right default.
+      expired: (json['expired'] as bool?) ?? false,
+      attachmentExpired: (json['attachment_expired'] as bool?) ?? false,
+      state: MessageSendState.fromServer(
+        sent: deliveryMap['sent'] as bool? ?? true,
+        delivered: deliveryMap['delivered'] as bool? ?? false,
+        read: deliveryMap['read'] as bool? ?? false,
+      ),
+    );
+  }
 }
 
 /// A conversation as the message list shows it.
@@ -158,6 +198,28 @@ class ConversationSummary {
   /// conversation whose only message has expired, which is a different thing
   /// from an empty conversation.
   final String? preview;
+
+  /// The server sends conversations with slightly different shapes: the direct
+  /// endpoint returns the resolved display name, the list endpoint returns a
+  /// summary. Both are handled here so a caller does not have to know which it
+  /// called.
+  factory ConversationSummary.fromJson(Map<String, dynamic> json) {
+    // The list endpoint may omit `unread_count` for a conversation with no
+    // unread messages rather than sending zero; both mean the same thing.
+    final unread = json['unread_count'];
+    return ConversationSummary(
+      id: json['id'] as int,
+      kind: (json['kind'] as String?) ?? 'direct',
+      title: json['title'] as String?,
+      avatarUrl: json['avatar_url'] as String?,
+      lastSeq: (json['last_seq'] as int?) ?? 0,
+      lastMessageAt: json['last_message_at'] == null
+          ? null
+          : DateTime.parse(json['last_message_at'] as String),
+      unreadCount: unread is int ? unread : 0,
+      preview: json['preview'] as String?,
+    );
+  }
 }
 
 /// A message waiting to reach the server.

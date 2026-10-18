@@ -7,12 +7,14 @@ import 'package:meridian/services/api_client.dart';
 import 'package:meridian/services/meridian_api.dart';
 import 'package:meridian/services/settings_store.dart';
 
+import 'support/stub_meridian_api.dart';
+
 /// A [MeridianApi] that records what it was asked and answers from memory.
 ///
 /// Records the calls rather than only returning canned values, because the
 /// behaviour worth checking is the shape of the traffic: which fields were sent,
 /// how many times, and whether a rejected write was retried or quietly dropped.
-class FakeMeridianApi implements MeridianApi {
+class FakeMeridianApi extends StubMeridianApi {
   FakeMeridianApi({UserPreferences? preferences})
     : storedPreferences =
           preferences ??

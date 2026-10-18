@@ -4,13 +4,14 @@ import 'package:meridian/models/settings.dart';
 import 'package:meridian/models/user.dart';
 import 'package:meridian/screens/home/new_chat_screen.dart';
 import 'package:meridian/services/api_client.dart';
-import 'package:meridian/services/meridian_api.dart';
+
+import 'support/stub_meridian_api.dart';
 
 /// Answers searches from a script, and records what was asked.
 ///
 /// Recording the queries is the point of half of these tests: the interesting
 /// failures are the requests that should never have been made.
-class SearchApi implements MeridianApi {
+class SearchApi extends StubMeridianApi {
   UserSearch answer = UserSearch.empty;
   ApiException? failure;
   final List<String> asked = [];

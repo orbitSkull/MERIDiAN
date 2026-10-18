@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 
+import '../data/chat_models.dart';
 import '../models/settings.dart';
 import '../models/user.dart';
 import 'api_config.dart';
@@ -491,6 +492,99 @@ class ApiClient implements MeridianApi {
     final data = response.data;
     if (data == null) return UserSearch.empty;
     return UserSearch.fromJson(data);
+  }
+
+  // ------------------------------------------------------------------
+  // messaging
+
+  @override
+  Future<List<ConversationSummary>> conversations() async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<List<dynamic>>('/conversations'),
+    );
+    final data = response.data;
+    if (data == null) return const [];
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(ConversationSummary.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<ChatPage> messages(
+    int conversationId, {
+    int? beforeSeq,
+    int limit = 50,
+  }) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.get<Map<String, dynamic>>(
+        '/conversations/$conversationId/messages',
+        queryParameters: {
+          'before_id': ?beforeSeq,
+          'limit': limit,
+        },
+      ),
+    );
+    final data = response.data;
+    if (data == null) return const ChatPage(messages: [], hasMore: false, newestSeq: 0);
+    final rows = (data['messages'] as List<dynamic>? ?? const []);
+    return ChatPage(
+      messages: rows
+          .whereType<Map<String, dynamic>>()
+          .map(ChatMessage.fromJson)
+          .toList(),
+      hasMore: (data['has_more'] as bool?) ?? false,
+      newestSeq: (data['newest_seq'] as int?) ?? 0,
+    );
+  }
+
+  @override
+  Future<ChatMessage> sendMessage(
+    int conversationId, {
+    required String clientId,
+    required String body,
+  }) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/conversations/$conversationId/messages',
+        data: {'client_id': clientId, 'body': body},
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response sending a message');
+    }
+    return ChatMessage.fromJson(data);
+  }
+
+  @override
+  Future<ConversationSummary> openDirect(int otherUserId) async {
+    await loadAccessToken();
+    final response = await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/conversations/direct',
+        queryParameters: {'other_id': otherUserId},
+      ),
+    );
+    final data = response.data;
+    if (data == null) {
+      throw ApiException('Empty response opening a conversation');
+    }
+    return ConversationSummary.fromJson(data);
+  }
+
+  @override
+  Future<void> markRead(int conversationId, int upToSeq) async {
+    await loadAccessToken();
+    await _guard(
+      () => _dio.post<Map<String, dynamic>>(
+        '/conversations/$conversationId/read',
+        data: {'up_to_seq': upToSeq},
+      ),
+    );
   }
 
   /// GET a JSON object from the API.

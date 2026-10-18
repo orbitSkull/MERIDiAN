@@ -1,3 +1,4 @@
+import '../data/chat_models.dart';
 import '../models/settings.dart';
 import '../models/user.dart';
 
@@ -77,4 +78,52 @@ abstract class MeridianApi {
   /// than three characters, and the result carries a truncated flag because the
   /// server caps how many rows one search returns.
   Future<UserSearch> searchUsers(String query);
+
+  // ------------------------------------------------------------------
+  // messaging
+
+  /// The signed-in person's conversations, newest activity first.
+  Future<List<ConversationSummary>> conversations();
+
+  /// One page of a conversation's messages, oldest first within the page.
+  ///
+  /// [beforeSeq] walks backwards. Null asks for the newest page, which is what
+  /// a conversation opens on.
+  Future<ChatPage> messages(int conversationId, {int? beforeSeq, int limit});
+
+  /// Send, or return the message this [clientId] already made.
+  ///
+  /// [clientId] is generated once on the device and reused for every retry.
+  /// That is what makes a retry safe: a send that succeeded but whose reply was
+  /// lost comes back as the same message rather than as a duplicate.
+  Future<ChatMessage> sendMessage(
+    int conversationId, {
+    required String clientId,
+    required String body,
+  });
+
+  /// Open, or reopen, the direct conversation with somebody.
+  Future<ConversationSummary> openDirect(int otherUserId);
+
+  /// Tell the server how far this device has read. Cheap and idempotent.
+  Future<void> markRead(int conversationId, int upToSeq);
+}
+
+/// One page from [MeridianApi.messages].
+class ChatPage {
+  const ChatPage({
+    required this.messages,
+    required this.hasMore,
+    required this.newestSeq,
+  });
+
+  final List<ChatMessage> messages;
+  final bool hasMore;
+
+  /// The highest sequence number in this page, or zero when it is empty.
+  ///
+  /// This is the catch-up cursor rather than the last id: ids are assigned by
+  /// the database and sequence numbers by the conversation, so a device can ask
+  /// "what is newer than this position" and be answered without scanning.
+  final int newestSeq;
 }
