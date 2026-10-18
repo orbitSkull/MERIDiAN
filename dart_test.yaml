@@ -1,0 +1,25 @@
+# The UI previews are skipped by a plain `flutter test`.
+#
+# test/preview/*.png are golden captures rendered with a Windows system font
+# (Segoe UI) loaded at run time. On another machine the font differs, the pixels
+# differ, and every preview fails -- which trains everyone to ignore a red suite
+# and makes the previews something nobody runs.
+#
+# They are still worth having: they are the only thing in this project that shows
+# what the app looks like, rather than asserting that a string exists somewhere in
+# the widget tree.
+#
+# To regenerate them:
+#     flutter test --tags preview --run-skipped --update-goldens
+#
+# Then open test/preview/*.png. Run without --update-goldens to see the diff
+# Flutter writes beside the golden.
+#
+# skip, not exclude_tags: an excluded tag cannot be selected back in, so the
+# previews would be permanently unrunnable.
+tags:
+  preview:
+    skip: >-
+      Golden captures tied to one machine's fonts. Run
+      `flutter test --tags preview --run-skipped --update-goldens` where they
+      belong.

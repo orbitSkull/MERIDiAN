@@ -29,7 +29,6 @@ class ConversationScreen extends StatefulWidget {
 class _ConversationScreenState extends State<ConversationScreen> {
   final TextEditingController _composer = TextEditingController();
   final ScrollController _scroll = ScrollController();
-  bool _canLoadOlder = false;
 
   ConversationController get _controller => widget.controller;
 
@@ -56,9 +55,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   void _onChanged() {
     if (!mounted) return;
-    setState(() {
-      _canLoadOlder = _controller.canLoadOlder;
-    });
+    setState(() {});
   }
 
   /// Fetch older history when the user reaches the top of the list.
@@ -139,22 +136,51 @@ class _ConversationScreenState extends State<ConversationScreen> {
                         horizontal: 12,
                         vertical: 8,
                       ),
-                      itemCount: _controller.messages.length + 1,
+                      // Two slots per message: the bubble, and the date
+                      // separator that sits *below* it. Counted rather than
+                      // spliced because the list is reversed, so index 0 is the
+                      // newest message and the count has to run backwards.
+                      itemCount: _controller.messages.length * 2 + 1,
                       itemBuilder: (context, index) {
-                        if (index == _controller.messages.length) {
+                        final messages = _controller.messages;
+
+                        // One extra slot past the oldest message, for the end of
+                        // the conversation.
+                        if (index >= messages.length * 2) {
                           return _TopOfHistory(
                             loading: _controller.isLoadingOlder,
-                            hasMore: _canLoadOlder,
+                            hasMore: _controller.canLoadOlder,
                           );
                         }
-                        // reversed: index 0 is the newest, so the message is
-                        // found from the end of the list.
-                        final message =
-                            _controller.messages[
-                                _controller.messages.length - 1 - index];
+
+                        final pair = index ~/ 2;
+
+                        if (index.isOdd) {
+                          // A separator belongs below the oldest message of its
+                          // day, which makes it read top-down as a heading for
+                          // everything older below it.
+                          final message =
+                              messages[messages.length - 1 - pair];
+                          final next = pair + 1 < messages.length
+                              ? messages[messages.length - 2 - pair]
+                              : null;
+                          if (next == null ||
+                              !_sameDay(message.createdAt, next.createdAt)) {
+                            return _DayDivider(day: message.createdAt);
+                          }
+                          return const SizedBox.shrink();
+                        }
+
+                        final position = messages.length - 1 - pair;
                         return _Bubble(
-                          message: message,
-                          mine: widget.myUserId == message.senderId,
+                          message: messages[position],
+                          mine: widget.myUserId == messages[position].senderId,
+                          // Only the last message of a run carries a time and a
+                          // tail. A timestamp on every bubble turns a
+                          // conversation into a column of clocks.
+                          showTimestamp: _isRunEnd(messages, position),
+                          continued: position > 0 &&
+                              _sameRun(messages[position - 1], messages[position]),
                         );
                       },
                     ),
@@ -162,9 +188,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
             _Composer(
               controller: _composer,
               onSend: _send,
-              hint: _controller.hasExpiredMessages
-                  ? 'Older messages have expired'
-                  : 'Message',
+              hint: 'Message',
             ),
           ],
         ),
@@ -253,25 +277,41 @@ class _FailureBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.labelMedium?.copyWith(
+      color: scheme.onErrorContainer,
+    );
+
     return Material(
       color: scheme.errorContainer,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        // Slim. A full-height bar for one unsent message shouts louder than the
+        // message it is about, and the failed bubble already carries its own
+        // Retry. This line exists for "retry all of them", so it stays quiet.
+        padding: const EdgeInsets.fromLTRB(16, 6, 12, 6),
         child: Row(
           children: [
-            Icon(Icons.error_outline_rounded, size: 18, color: scheme.onErrorContainer),
+            Icon(Icons.error_outline_rounded, size: 16, color: scheme.onErrorContainer),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                pending == 1 ? '1 message was not sent' : '$pending messages were not sent',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onErrorContainer,
-                ),
+                pending == 1
+                    ? '1 message was not sent'
+                    : '$pending messages were not sent',
+                style: style,
               ),
             ),
-            TextButton(
-              onPressed: () => onRetryAll(),
-              child: const Text('Retry'),
+            // A text action rather than a TextButton: a filled button here drew
+            // more attention than the conversation itself.
+            InkWell(
+              onTap: () => onRetryAll(),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(
+                  'Retry all',
+                  style: style?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
             ),
           ],
         ),
@@ -280,31 +320,150 @@ class _FailureBanner extends StatelessWidget {
   }
 }
 
-class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message, required this.mine});
+/// Consecutive messages from one person within [runWindow] read as a run.
+bool _sameRun(ChatMessage older, ChatMessage newer) =>
+    older.senderId == newer.senderId &&
+    newer.createdAt.difference(older.createdAt).abs() < const Duration(minutes: 20);
 
-  final ChatMessage message;
-  final bool mine;
+/// True when nothing older continues the same run, so this is where the time
+/// and the tail belong.
+bool _isRunEnd(List<ChatMessage> display, int position) {
+  if (position == display.length - 1) return true;
+  return !_sameRun(display[position], display[position + 1]);
+}
+
+bool _sameDay(DateTime a, DateTime b) {
+  final localA = a.toLocal();
+  final localB = b.toLocal();
+  return localA.year == localB.year &&
+      localA.month == localB.month &&
+      localA.day == localB.day;
+}
+
+/// "Today" / "Yesterday" / a date.
+///
+/// Reading a timestamp is work; a person looking for "what did we say on
+/// Tuesday" should not have to do it. Relatives only where they are genuinely
+/// clearer -- "14:30" last week is worse than "3 Mar".
+String _dayLabel(DateTime when) {
+  final local = when.toLocal();
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final that = DateTime(local.year, local.month, local.day);
+  final days = today.difference(that).inDays;
+  if (days == 0) return 'Today';
+  if (days == 1) return 'Yesterday';
+  if (days < 7) {
+    const names = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    return names[local.weekday - 1];
+  }
+  return '${local.day} ${_months[local.month - 1]}';
+}
+
+const _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+class _DayDivider extends StatelessWidget {
+  const _DayDivider({required this.day});
+
+  final DateTime day;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final background = mine ? scheme.primaryContainer : scheme.surfaceContainerHighest;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(99),
+          ),
+          child: Text(
+            _dayLabel(day),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Bubble extends StatelessWidget {
+  const _Bubble({
+    required this.message,
+    required this.mine,
+    this.showTimestamp = true,
+    this.continued = false,
+  });
+
+  final ChatMessage message;
+  final bool mine;
+
+  /// Whether this message closes a run, and so is the one that carries a time
+  /// and the pointed corner.
+  final bool showTimestamp;
+
+  /// Whether the message above is from the same person in the same run, so this
+  /// one sits tight under it instead of floating.
+  final bool continued;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final background = mine
+        ? scheme.primaryContainer
+        : scheme.surfaceContainerHighest;
     final foreground = mine ? scheme.onPrimaryContainer : scheme.onSurface;
 
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 320),
-        margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-        padding: const EdgeInsets.fromLTRB(12, 8, 8, 6),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+        ),
+        // Tight under the previous message of the same run, loose under a
+        // change of speaker or of day. That single number is most of what makes
+        // a conversation read as a conversation.
+        margin: EdgeInsets.only(
+          top: continued ? 2 : 8,
+          bottom: 2,
+          left: 4,
+          right: 4,
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 7, 10, 6),
         decoration: BoxDecoration(
           color: background,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
             topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(mine ? 16 : 4),
-            bottomRight: Radius.circular(mine ? 4 : 16),
+            // Only the message that closes a run gets the pointed corner, so a
+            // stack of three looks like one utterance rather than three.
+            bottomLeft: Radius.circular(!mine && showTimestamp ? 4 : 16),
+            bottomRight: Radius.circular(mine && showTimestamp ? 4 : 16),
           ),
         ),
         child: Column(
@@ -325,52 +484,39 @@ class _Bubble extends StatelessWidget {
                 text: 'Attachment expired',
                 color: foreground,
               ),
-            const SizedBox(height: 2),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Text(
-                  _formatTime(message.createdAt),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: foreground.withValues(alpha: 0.6),
-                  ),
+            if (showTimestamp || mine || message.canRetry)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (showTimestamp)
+                      Text(
+                        _formatTime(message.createdAt),
+                        style: Theme.of(context).textTheme.labelSmall
+                            ?.copyWith(
+                              color: foreground.withValues(alpha: 0.6),
+                            ),
+                      ),
+                    if (mine) ...[
+                      const SizedBox(width: 4),
+                      _Ticks(message: message, color: foreground),
+                    ],
+                  ],
                 ),
-                if (mine) ...[
-                  const SizedBox(width: 4),
-                  _Ticks(message: message, color: foreground),
-                ],
-              ],
-            ),
-            if (message.canRetry)
-              // Wrap, not Row: the two actions plus the icon and label overflow
-              // a 320px bubble in a large text scale, and the overflow stripe
-              // would cover the message the user is trying to recover.
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 4,
-                children: [
-                  TextButton.icon(
-                    onPressed: () => _retry(context),
-                    icon: Icon(
-                      Icons.refresh_rounded,
-                      size: 14,
-                      color: scheme.error,
-                    ),
-                    label: Text(
-                      'Not sent. Retry',
-                      style: TextStyle(color: scheme.error),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => _discard(context),
-                    child: Text(
-                      'Discard',
-                      style: TextStyle(color: foreground.withValues(alpha: 0.7)),
-                    ),
-                  ),
-                ],
               ),
+            // A failed send. One compact line, not two buttons inside the
+            // bubble: the banner above already says the message was not sent and
+            // offers a Retry for all of them, so repeating it here at button
+            // scale doubled the shouting and stretched the bubble to twice the
+            // height of the message it was about.
+            if (message.canRetry) _FailedFooter(
+              message: message,
+              foreground: foreground,
+              onRetry: () => _retry(context),
+              onDiscard: () => _discard(context),
+            ),
           ],
         ),
       ),
@@ -392,6 +538,58 @@ class _Bubble extends StatelessWidget {
   }
 }
 
+/// The affordance on a message that never arrived.
+class _FailedFooter extends StatelessWidget {
+  const _FailedFooter({
+    required this.message,
+    required this.foreground,
+    required this.onRetry,
+    required this.onDiscard,
+  });
+
+  final ChatMessage message;
+  final Color foreground;
+  final VoidCallback onRetry;
+  final VoidCallback onDiscard;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+      color: scheme.error,
+      fontWeight: FontWeight.w600,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        children: [
+          InkWell(
+            onTap: onRetry,
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text('Not sent · Retry', style: style),
+            ),
+          ),
+          InkWell(
+            onTap: onDiscard,
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text(
+                'Discard',
+                style: style?.copyWith(color: foreground.withValues(alpha: 0.7)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class _Notice extends StatelessWidget {
   const _Notice({required this.icon, required this.text, required this.color});
 

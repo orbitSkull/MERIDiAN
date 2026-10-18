@@ -201,25 +201,47 @@ class _ConversationTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final unread = conversation.unreadCount;
     final title = conversation.title ?? 'Conversation';
+    final when = conversation.lastMessageAt;
 
     return ListTile(
       onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       leading: CircleAvatar(
+        radius: 23,
         backgroundColor: scheme.primaryContainer,
         child: Text(
           title.isEmpty ? '?' : title[0].toUpperCase(),
           style: TextStyle(color: scheme.onPrimaryContainer),
         ),
       ),
-      title: Text(
-        title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(fontWeight: unread > 0 ? FontWeight.w700 : null),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: unread > 0 ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ),
+          // Without a time on the row, telling two conversations apart means
+          // opening both. Relative for today and yesterday, a date beyond that.
+          if (when != null) ...[
+            const SizedBox(width: 8),
+            Text(
+              _rowTime(when),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: unread > 0 ? scheme.primary : scheme.outline,
+              ),
+            ),
+          ],
+        ],
       ),
-      // Null preview means the conversation's only message has expired, which is
-      // not the same as a conversation with nothing in it.
       subtitle: Text(
+        // Null preview means the conversation's only message has expired, which
+        // is not the same as a conversation with nothing in it.
         conversation.preview ?? 'No messages yet',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -232,5 +254,37 @@ class _ConversationTile extends StatelessWidget {
           ? Badge(label: Text('$unread'), backgroundColor: scheme.primary)
           : null,
     );
+  }
+
+  /// `14:32` today, `Yesterday`, `12 Mar` beyond.
+  static String _rowTime(DateTime when) {
+    final local = when.toLocal();
+    final now = DateTime.now();
+    final days = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).difference(DateTime(local.year, local.month, local.day)).inDays;
+    if (days == 0) {
+      final hour = local.hour.toString().padLeft(2, '0');
+      final minute = local.minute.toString().padLeft(2, '0');
+      return '$hour:$minute';
+    }
+    if (days == 1) return 'Yesterday';
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${local.day} ${months[local.month - 1]}';
   }
 }

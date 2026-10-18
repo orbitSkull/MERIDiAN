@@ -255,7 +255,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('in a lift'), findsOneWidget);
-      expect(find.text('Not sent. Retry'), findsNothing,
+      expect(find.text('Not sent · Retry'), findsNothing,
           reason: 'it will be retried, so it is not a failed message yet');
     });
   });
@@ -273,7 +273,7 @@ void main() {
 
       expect(find.text('blocked'), findsOneWidget,
           reason: 'the words must survive a refusal');
-      expect(find.text('Not sent. Retry'), findsOneWidget);
+      expect(find.text('Not sent · Retry'), findsOneWidget);
       expect(find.text('Discard'), findsOneWidget);
     });
 
@@ -288,7 +288,7 @@ void main() {
       await tester.pumpAndSettle();
       final firstId = api.sendClientIds.single;
 
-      await tester.tap(find.text('Not sent. Retry'));
+      await tester.tap(find.text('Not sent · Retry'));
       await tester.pumpAndSettle();
 
       // The server may have accepted it already; a lost response looks exactly
