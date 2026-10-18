@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../services/auth_service.dart';
+import '../../services/chat_environment.dart';
 import '../../services/usage_username_availability.dart';
 import '../../theme/app_theme.dart';
 import 'ai_history_screen.dart';
@@ -28,7 +30,12 @@ class _HomeScreenState extends State<HomeScreen> {
   late final PageController _pageController = PageController();
 
   late final List<Widget> _pages = [
-    ChatsScreen(api: widget.auth.api, myUsername: widget.auth.user?.username),
+    ChatsScreen(
+      api: widget.auth.api,
+      chat: context.watch<ChatEnvironmentHolder>().environment,
+      myUserId: widget.auth.user?.id,
+      myUsername: widget.auth.user?.username,
+    ),
     const FeedScreen(),
     const AiScreen(),
     SettingsScreen(

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'screens/session_gate.dart';
 import 'services/auth_service.dart';
+import 'services/chat_environment.dart';
 import 'services/settings_store.dart';
 import 'theme/app_theme.dart';
 
@@ -13,14 +14,29 @@ Future<void> main() async {
   await AppThemeMode.load();
   final settings = await SettingsStore.load();
 
-  runApp(MeridianApp(auth: AuthService(), settings: settings));
+  final auth = AuthService();
+  runApp(
+    MeridianApp(
+      auth: auth,
+      settings: settings,
+      // Built once here rather than per screen: the store is a database on
+      // disk, and a second one per conversation would be a second chat history.
+      chat: ChatEnvironmentHolder(api: auth.api),
+    ),
+  );
 }
 
 class MeridianApp extends StatelessWidget {
-  const MeridianApp({super.key, required this.auth, required this.settings});
+  const MeridianApp({
+    super.key,
+    required this.auth,
+    required this.settings,
+    required this.chat,
+  });
 
   final AuthService auth;
   final SettingsStore settings;
+  final ChatEnvironmentHolder chat;
 
   @override
   Widget build(BuildContext context) {
@@ -31,6 +47,9 @@ class MeridianApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<AuthService>.value(value: auth),
+        // Above MaterialApp so every chat screen below can reach the store,
+        // and so sign-out has one place to wipe another person's messages.
+        ChangeNotifierProvider<ChatEnvironmentHolder>.value(value: chat),
         // A proxy rather than a plain provider, because preferences only sync
         // while somebody is signed in. This is where the store learns about the
         // session: attached on sign-in, detached on sign-out, so a toggle

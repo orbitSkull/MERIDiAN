@@ -20,6 +20,7 @@ class SyncOutcome {
     this.conversations = 0,
     this.pages = 0,
     this.newestSeq = 0,
+    this.hasMore = false,
     this.stoppedEarly = false,
   });
 
@@ -31,6 +32,9 @@ class SyncOutcome {
   final int pages;
   final int newestSeq;
 
+  /// The server has more in this direction.
+  final bool hasMore;
+
   /// The pass hit its page ceiling with more to fetch.
   ///
   /// Surfaced rather than hidden. A sync that quietly stops early looks exactly
@@ -41,7 +45,8 @@ class SyncOutcome {
   @override
   String toString() =>
       'SyncOutcome(messages: $messages, conversations: $conversations, '
-      'pages: $pages, newestSeq: $newestSeq, stoppedEarly: $stoppedEarly)';
+      'pages: $pages, newestSeq: $newestSeq, hasMore: $hasMore, '
+      'stoppedEarly: $stoppedEarly)';
 }
 
 /// Pulls the server's history into the device's own store.
@@ -57,16 +62,17 @@ class SyncOutcome {
 /// starts from whatever the server still has. That is the intended trade: the
 /// device is the archive, and the server is a window.
 class ChatSync {
-  ChatSync({
-    required MeridianApi api,
-    required ChatStore store,
-  }) : _api = api,
-       _store = store;
+  // The constructor takes public named arguments and assigns them to private
+  // fields, which the initializing-formals lint reads as a mistake. Collapsing
+  // them would make the named arguments private and force positional callers.
+  ChatSync({required MeridianApi api, required ChatStore store})
+    : _api = api,
+      _store = store;
 
   final MeridianApi _api;
   final ChatStore _store;
 
-  /// Pages per conversation in one pass.
+  /// Pages per pass.
   ///
   /// A conversation a month old can hold thousands of messages. Fetching all of
   /// them on open would be slow, expensive and pointless — the user is looking
@@ -98,66 +104,111 @@ class ChatSync {
 
   /// Fetch the newest pages of one conversation into the store.
   ///
-  /// [newestSeqKnown] is what the device already has, used to skip the walk when
-  /// nothing has changed — which is the common case, because most syncs happen
-  /// when the user opens the app and most of the time nobody has written
-  /// anything.
+  /// [newestSeqKnown] is what the device already holds, used to stop after the
+  /// first page when nothing has changed — which is the common case, because
+  /// most syncs happen when the app opens and most of the time nobody has
+  /// written anything.
   Future<SyncOutcome> syncConversation(
     int conversationId, {
     int? newestSeqKnown,
   }) async {
-    int? beforeSeq;
-    var newestSeq = newestSeqKnown ?? 0;
+    return _walk(
+      conversationId,
+      startBefore: null,
+      maxPages: maxPagesPerPass,
+      stopWhenCaughtUp: newestSeqKnown != null && newestSeqKnown > 0,
+      knownNewest: newestSeqKnown,
+    );
+  }
+
+  /// Fetch pages older than [beforeSeq].
+  ///
+  /// Separate from [syncConversation] because it starts from a cursor rather
+  /// than the newest end. Without it there is no way to scroll back in a
+  /// conversation: the catch-up sync only ever asks for the newest page, so
+  /// history beyond it would be unreachable no matter how far the user scrolled.
+  Future<SyncOutcome> fetchOlder(
+    int conversationId, {
+    required int beforeSeq,
+    int maxPages = maxPagesPerPass,
+  }) async {
+    return _walk(
+      conversationId,
+      startBefore: beforeSeq,
+      maxPages: maxPages,
+    );
+  }
+
+  /// The one paging loop, shared so the two entry points cannot drift.
+  ///
+  /// [stopWhenCaughtUp] ends the walk after the first page when the server's
+  /// newest sequence is not ahead of what the device already had. Without it,
+  /// opening a conversation nobody has written to since the last sync walks
+  /// backwards through the entire history for nothing.
+  Future<SyncOutcome> _walk(
+    int conversationId, {
+    required int? startBefore,
+    required int maxPages,
+    bool stopWhenCaughtUp = false,
+    int? knownNewest,
+  }) async {
+    int? before = startBefore;
+    var newestSeq = knownNewest ?? 0;
     var fetched = 0;
     var pages = 0;
+    var hasMore = false;
 
-    while (pages < maxPagesPerPass) {
+    while (pages < maxPages) {
       final ChatPage page;
       try {
         page = await _api.messages(
           conversationId,
-          beforeSeq: beforeSeq,
+          beforeSeq: before,
           limit: pageSize,
         );
       } on ApiException catch (error) {
         // Offline is the normal case, not an error worth surfacing as one. The
         // pages already fetched are kept, because they are good, and the next
-        // pass continues.
-        debugPrint('Sync of conversation $conversationId stopped: ${error.message}');
+        // pass continues from there.
+        debugPrint(
+          'Sync of conversation $conversationId stopped: ${error.message}',
+        );
         return SyncOutcome(
           messages: fetched,
           pages: pages,
           newestSeq: newestSeq,
+          hasMore: hasMore,
           stoppedEarly: true,
         );
       }
 
-      if (page.messages.isEmpty) break;
-      await _store.upsertMessages(page.messages);
-      fetched += page.messages.length;
-      pages++;
-
-      // Walk backwards by the oldest sequence number *in the page*, which the
-      // server already sorted ascending.
-      final oldest = page.messages.first.seq;
-      if (oldest == null) {
-        // Nothing to page by, which should not happen for server messages.
+      if (page.messages.isEmpty) {
+        hasMore = false;
         break;
       }
 
-      // Caught up: the server's newest sequence is not ahead of what the device
-      // already holds, so walking further back would only fetch history the
-      // device has.
-      if (newestSeq > 0 && page.newestSeq <= newestSeq && pages == 1) {
+      await _store.upsertMessages(page.messages);
+      fetched += page.messages.length;
+      pages++;
+      hasMore = page.hasMore;
+
+      // Walk backwards by the oldest sequence number *in the page*, which the
+      // server already sorted ascending. Null should be impossible for a server
+      // message; if it happens, there is no cursor to continue from.
+      final oldest = page.messages.first.seq;
+      if (oldest == null) break;
+
+      if (stopWhenCaughtUp && pages == 1 && page.newestSeq <= newestSeq) {
         return SyncOutcome(
           messages: fetched,
           pages: pages,
           newestSeq: page.newestSeq,
+          hasMore: page.hasMore,
         );
       }
 
       newestSeq = page.newestSeq > newestSeq ? page.newestSeq : newestSeq;
-      beforeSeq = oldest;
+      before = oldest;
 
       if (!page.hasMore) break;
     }
@@ -166,7 +217,8 @@ class ChatSync {
       messages: fetched,
       pages: pages,
       newestSeq: newestSeq,
-      stoppedEarly: pages >= maxPagesPerPass,
+      hasMore: hasMore,
+      stoppedEarly: pages >= maxPages && hasMore,
     );
   }
 }

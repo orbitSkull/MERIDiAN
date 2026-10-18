@@ -1,45 +1,129 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../data/chat_models.dart';
+import '../../services/api_client.dart';
+import '../../services/chat_environment.dart';
 import '../../services/meridian_api.dart';
+import 'conversation_controller.dart';
+import 'conversation_screen.dart';
 import 'new_chat_screen.dart';
 import 'widgets/empty_state.dart';
 
-class ChatsScreen extends StatelessWidget {
-  const ChatsScreen({super.key, required this.api, this.myUsername});
+/// The list of conversations.
+///
+/// Reads from the device's store and never from the network directly, for the
+/// same reason the conversation screen does: the app has to be usable with no
+/// signal, and the only way to guarantee that is for the UI to have one source
+/// and for it to be the local one.
+class ChatsScreen extends StatefulWidget {
+  const ChatsScreen({
+    super.key,
+    required this.api,
+    required this.chat,
+    this.myUserId,
+    this.myUsername,
+  });
 
-  /// Passed to the new-chat screen, which needs it to search for people.
   final MeridianApi api;
 
-  /// The signed-in handle, so search does not list you as somebody to message.
+  /// Owns the store, the outbox and the sync engine. One object rather than four
+  /// parameters, and one place to clear on sign-out.
+  final ChatEnvironment chat;
+  final int? myUserId;
   final String? myUsername;
 
-  void _openNewChat(BuildContext context) {
-    Navigator.of(context).push(
+  @override
+  State<ChatsScreen> createState() => _ChatsScreenState();
+}
+
+class _ChatsScreenState extends State<ChatsScreen> {
+  List<ConversationSummary> _conversations = const [];
+  String _query = '';
+  bool _syncing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+    unawaited(_refresh());
+  }
+
+  Future<void> _load() async {
+    final loaded = await widget.chat.store.conversations();
+    if (!mounted) return;
+    setState(() => _conversations = loaded);
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    setState(() => _syncing = true);
+    try {
+      await widget.chat.sync.syncAll();
+      // Sending whatever is queued is what makes a message that was typed while
+      // offline eventually leave, without the user having to remember it.
+      await widget.chat.senderFor(widget.myUserId ?? 0).flush();
+      await _load();
+    } on ApiException {
+      // Offline at the list level is normal and invisible: whatever the device
+      // already has is what is shown.
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  List<ConversationSummary> get _visible {
+    final query = _query.trim().toLowerCase();
+    if (query.isEmpty) return _conversations;
+    return _conversations
+        .where(
+          (c) =>
+              (c.title ?? '').toLowerCase().contains(query) ||
+              (c.preview ?? '').toLowerCase().contains(query),
+        )
+        .toList();
+  }
+
+  Future<void> _open(ConversationSummary conversation) async {
+    final controller = ConversationController(
+      conversationId: conversation.id,
+      api: widget.api,
+      store: widget.chat.store,
+      outbox: widget.chat.outbox,
+      sender: widget.chat.senderFor(widget.myUserId ?? 0),
+      sync: widget.chat.sync,
+    );
+    await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => NewChatScreen(api: api, myUsername: myUsername),
+        builder: (_) => ConversationScreen(
+          controller: controller,
+          myUserId: widget.myUserId,
+        ),
       ),
     );
+    // Ticks and the preview will have moved.
+    await _load();
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final visible = _visible;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Column(
         children: [
-          // Search field below title bar (WhatsApp-style).
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: TextField(
+              onChanged: (value) => setState(() => _query = value),
               decoration: InputDecoration(
                 hintText: 'Search messages or names…',
                 prefixIcon: const Icon(Icons.search_rounded),
                 filled: true,
-                fillColor: scheme.surfaceContainerHighest.withValues(
-                  alpha: 0.5,
-                ),
+                fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 12,
@@ -59,22 +143,92 @@ class ChatsScreen extends StatelessWidget {
               ),
             ),
           ),
-          const Expanded(
-            child: EmptyState(
-              icon: Icons.chat_bubble_outline_rounded,
-              title: 'No chats yet.',
-              subtitle:
-                  'Your conversations with friends and faculty will show up here.',
-              actionLabel: 'Start a chat',
-            ),
+          if (_syncing) const LinearProgressIndicator(minHeight: 2),
+          Expanded(
+            child: visible.isEmpty
+                ? EmptyState(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    title: _query.isEmpty ? 'No chats yet.' : 'No matches.',
+                    subtitle: _query.isEmpty
+                        ? 'Your conversations with friends and faculty will '
+                              'show up here.'
+                        : 'Nothing matches “$_query”.',
+                    actionLabel: _query.isEmpty ? 'Start a chat' : 'Clear search',
+                  )
+                : RefreshIndicator(
+                    onRefresh: _refresh,
+                    child: ListView.separated(
+                      itemCount: visible.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final conversation = visible[index];
+                        return _ConversationTile(
+                          conversation: conversation,
+                          onTap: () => _open(conversation),
+                        );
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _openNewChat(context),
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => NewChatScreen(
+              api: widget.api,
+              myUsername: widget.myUsername,
+            ),
+          ),
+        ),
         tooltip: 'New chat',
         child: const Icon(Icons.add_rounded, size: 28),
       ),
+    );
+  }
+}
+
+class _ConversationTile extends StatelessWidget {
+  const _ConversationTile({required this.conversation, required this.onTap});
+
+  final ConversationSummary conversation;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final unread = conversation.unreadCount;
+    final title = conversation.title ?? 'Conversation';
+
+    return ListTile(
+      onTap: onTap,
+      leading: CircleAvatar(
+        backgroundColor: scheme.primaryContainer,
+        child: Text(
+          title.isEmpty ? '?' : title[0].toUpperCase(),
+          style: TextStyle(color: scheme.onPrimaryContainer),
+        ),
+      ),
+      title: Text(
+        title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontWeight: unread > 0 ? FontWeight.w700 : null),
+      ),
+      // Null preview means the conversation's only message has expired, which is
+      // not the same as a conversation with nothing in it.
+      subtitle: Text(
+        conversation.preview ?? 'No messages yet',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: conversation.preview == null ? scheme.outline : null,
+          fontStyle: conversation.preview == null ? FontStyle.italic : null,
+        ),
+      ),
+      trailing: unread > 0
+          ? Badge(label: Text('$unread'), backgroundColor: scheme.primary)
+          : null,
     );
   }
 }

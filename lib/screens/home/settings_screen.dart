@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/user.dart';
 import '../../services/auth_service.dart';
+import '../../services/chat_environment.dart';
 import '../../services/meridian_api.dart';
 import '../../services/settings_store.dart';
 import '../../services/usage_username_availability.dart';
@@ -70,6 +71,22 @@ class SettingsScreen extends StatelessWidget {
     // password change that token is already dead, and logout is best-effort
     // about it, so this still lands on the login screen.
     await auth.logout();
+
+    // The chat database holds this person's conversations and is not covered by
+    // clearing tokens. Whoever signs in next on this device would otherwise be
+    // able to read them, which is not a bug anybody should have to find.
+    //
+    // Before the navigation below, so the wipe happens even if the push throws.
+    if (!context.mounted) return;
+    final chatHolder = context.read<ChatEnvironmentHolder>();
+    try {
+      await chatHolder.handleSignOut(auth.api);
+    } catch (error) {
+      // A failed wipe must not block the logout itself -- the user asked to
+      // leave, and the session really has ended. Logged, not swallowed.
+      debugPrint('Could not clear the local chat database on sign-out: $error');
+    }
+
     if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => OnboardingScreen(auth: auth)),
