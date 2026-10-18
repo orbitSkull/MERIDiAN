@@ -198,6 +198,20 @@ class ApiClient implements MeridianApi {
   ///
   /// Returns false when the refresh token is missing or the server rejected
   /// it. Does *not* clear tokens; callers decide that.
+  /// The access token for a WebSocket handshake.
+  ///
+  /// Separate from [loadAccessToken] because a socket cannot go through the
+  /// request interceptor that transparently refreshes an expired token -- the
+  /// handshake is not a request. So the socket asks here, and on rejection comes
+  /// back through [tryRefresh] rather than refreshing on a timer it does not
+  /// need.
+  ///
+  /// Null when nobody is signed in, which the socket treats as "there is
+  /// nothing to connect to" rather than as an error to retry.
+  Future<String?> accessTokenForSocket() async {
+    await loadAccessToken();
+    return _accessToken;
+  }
   Future<bool> tryRefresh() async {
     final result = await _refreshOnce();
     if (result.outcome != RefreshOutcome.success) return false;
