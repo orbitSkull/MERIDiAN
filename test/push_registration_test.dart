@@ -42,8 +42,17 @@ class _FakePush implements PushService {
   Future<void> markSeen() async => seenCalls++;
 
   @override
-  void onForegroundMessage(void Function(PushEnvelope) handler) {}
+  void onIncoming(void Function() handler) {
+    incoming = handler;
+  }
 }
+
+/// What the last thing this fake was told to call was.
+///
+/// Enough to prove the wiring exists: PushRegistration has to be able to hear
+/// about a notification arriving, and without this the registration class could
+/// stop listening and every test would still pass.
+void Function()? incoming;
 
 class _Api extends StubMeridianApi {}
 
@@ -153,6 +162,18 @@ void main() {
       await _settle();
       await registration.markSeen();
       expect(push.seenCalls, 1);
+    });
+
+    test('registering starts listening for incoming notifications', () async {
+      final push = _FakePush();
+      final registration = PushRegistration(service: push);
+
+      registration.bindApi(_Api());
+      await _settle();
+
+      // Without this a notification tapped while the app is open sets
+      // lastOpened and nothing ever looks at it -- the tap appears to do nothing.
+      expect(incoming, isNotNull);
     });
 
     test('a pending notification is taken exactly once', () async {

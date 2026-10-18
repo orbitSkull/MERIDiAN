@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "510119889075",
+    "project_id": "meridian-00",
+    "storage_bucket": "meridian-00.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:510119889075:android:4d04136c45e001794a48c6",
+        "android_client_info": {
+          "package_name": "com.meridian.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA_7N3uvY0F5BdEnGrjj4yu35hKA81Q3-A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

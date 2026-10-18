@@ -57,6 +57,8 @@ class PushRegistration extends ChangeNotifier {
   Future<void> register() async {
     final api = _api;
     if (api == null || _registered) return;
+    _service.onIncoming(notifyListeners);
+
     try {
       final deviceId = await _service.register();
       if (_registered == (deviceId != null)) return;

@@ -38,8 +38,13 @@ abstract class PushService {
   /// app for a week.
   Future<void> markSeen();
 
-  /// Called with each message that arrives while the app is open.
-  void onForegroundMessage(void Function(PushEnvelope) handler);
+  /// Called when a notification has arrived and [lastOpened] now points at a
+  /// conversation somebody should be taken to.
+  ///
+  /// Not a payload argument on purpose: the only thing a caller does with a
+  /// notification is look at [lastOpened] and take it if it is there, and
+  /// passing the value as well would be two sources of truth for the same thing.
+  void onIncoming(void Function() handler);
 
   /// The conversation a notification should open.
   PushEnvelope? lastOpened;
@@ -82,8 +87,22 @@ class FcmPushService implements PushService {
   FirebaseMessaging? _messaging;
   int? _deviceId;
 
+  final List<void Function()> _incoming = [];
+
   @override
   PushEnvelope? lastOpened;
+
+  /// Record a conversation and tell anybody listening.
+  void _noteOpened(Map<String, dynamic> data) {
+    final envelope = PushEnvelope.fromData(data);
+    if (envelope == null) return;
+    lastOpened = envelope;
+    // Copied first: a handler is free to unsubscribe itself from inside the
+    // call, and mutating the list mid-iteration would skip the next listener.
+    for (final handler in List.of(_incoming)) {
+      handler();
+    }
+  }
 
   Future<FirebaseMessaging> _instance() async {
     final existing = _messaging;
@@ -138,18 +157,17 @@ class FcmPushService implements PushService {
         unawaited(_registerToken(refreshed));
       });
 
-      // While the app is open the socket already delivers the message. This is
-      // only here so that a notification which arrived some other way still
-      // opens the right conversation.
-      FirebaseMessaging.onMessage.listen((message) {
-        final envelope = PushEnvelope.fromData(message.data);
-        if (envelope != null) lastOpened = envelope;
-      });
+      // While the app is open the socket already delivers the message. These are
+      // here so that a notification which arrived some other way, or was tapped
+      // while the app was in the foreground, still opens the right
+      // conversation.
+      FirebaseMessaging.onMessage.listen(
+        (message) => _noteOpened(message.data),
+      );
 
-      FirebaseMessaging.onMessageOpenedApp.listen((message) {
-        final envelope = PushEnvelope.fromData(message.data);
-        if (envelope != null) lastOpened = envelope;
-      });
+      FirebaseMessaging.onMessageOpenedApp.listen(
+        (message) => _noteOpened(message.data),
+      );
 
       return _deviceId;
     } on FirebaseException {
@@ -204,10 +222,7 @@ class FcmPushService implements PushService {
   }
 
   @override
-  void onForegroundMessage(void Function(PushEnvelope) handler) {
-    // Nothing to attach here yet: the socket is the live path, and the handler
-    // exists for the case where a push arrives first and the socket catches up.
-  }
+  void onIncoming(void Function() handler) => _incoming.add(handler);
 }
 
 /// Push that does nothing.
@@ -230,5 +245,5 @@ class NoopPushService implements PushService {
   Future<void> markSeen() async {}
 
   @override
-  void onForegroundMessage(void Function(PushEnvelope) handler) {}
+  void onIncoming(void Function() handler) {}
 }

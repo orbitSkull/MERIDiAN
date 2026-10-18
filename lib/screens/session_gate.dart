@@ -3,7 +3,10 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/chat_environment.dart';
+import '../services/push_registration.dart';
 import '../theme/app_theme.dart';
+import 'home/conversation_controller.dart';
+import 'home/conversation_screen.dart';
 import 'home/home_screen.dart';
 import 'onboarding_screen.dart';
 
@@ -26,6 +29,59 @@ class _SessionGateState extends State<SessionGate> {
   /// The status the chat environment was last opened for, so a rebuild does not
   /// open it twice and two statuses do not race.
   SessionStatus? _openedFor;
+
+  /// Watched so a notification tapped while the app is already open still opens
+  /// its conversation, not just the cold-start case.
+  PushRegistration? _push;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final push = context.read<PushRegistration>();
+    if (identical(push, _push)) return;
+    _push?.removeListener(_onPush);
+    _push = push..addListener(_onPush);
+  }
+
+  @override
+  void dispose() {
+    _push?.removeListener(_onPush);
+    super.dispose();
+  }
+
+  void _onPush() => _openPendingConversation();
+
+  /// Open whatever conversation a tapped notification pointed at.
+  ///
+  /// Take-then-navigate rather than navigate-then-clear, so a rebuild mid-push
+  /// cannot open the same conversation twice.
+  void _openPendingConversation() {
+    final push = _push;
+    if (push == null || !mounted) return;
+    final envelope = push.takePendingOpen();
+    if (envelope == null) return;
+
+    final chat = context.read<ChatEnvironmentHolder>().environment;
+    final myUserId = widget.auth.user?.id;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ConversationScreen(
+          controller: ConversationController(
+            conversationId: envelope.conversationId,
+            myUserId: myUserId,
+            api: chat.api,
+            store: chat.store,
+            outbox: chat.outbox,
+            sender: chat.senderFor(myUserId ?? 0),
+            sync: chat.sync,
+            realtime: chat.realtime,
+          ),
+          myUserId: myUserId,
+        ),
+      ),
+    );
+  }
 
   void _retry() {
     setState(() {
@@ -66,8 +122,14 @@ class _SessionGateState extends State<SessionGate> {
                   // for the app: the user can still read their profile and
                   // change settings. Logged rather than fatal on purpose.
                   debugPrint('Could not open the chat store: $error');
-                });
+});
           }
+
+          // A notification tapped before there was a session -- the common case,
+          // since a notification is what wakes the phone up in the first place.
+          // Only once per status, and after the environment is opened, because
+          // the controller below needs a store to read the conversation from.
+          _openPendingConversation();
         }
 
         return switch (status) {
