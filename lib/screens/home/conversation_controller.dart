@@ -80,18 +80,14 @@ class ConversationController extends ChangeNotifier {
     final loaded = await _store.messages(conversationId);
     _messages = loaded;
     _conversation = await _store.conversation(conversationId);
-    // A page's worth is the threshold: below it, this is the whole history.
-    if (loaded.length < ChatSync.pageSize && _canLoadOlder) {
-      final oldest = loaded.isEmpty ? null : loaded.first.seq;
-      if (oldest != null) {
-        final older = await _store.messages(
-          conversationId,
-          beforeSeq: oldest,
-          limit: 1,
-        );
-        _canLoadOlder = older.isNotEmpty;
-      }
-    }
+    // A full page means there may be more on this device; a short one means the
+    // device has run out.
+    //
+    // This has to be derived, not merely updated when it is already true. It
+    // previously only ever cleared the flag on a short page, which left it false
+    // for a device holding exactly a page's worth of history -- so older messages
+    // could never be fetched, by any route.
+    _canLoadOlder = loaded.length >= ChatSync.pageSize;
   }
 
   /// Pull the server's view, and send anything queued.

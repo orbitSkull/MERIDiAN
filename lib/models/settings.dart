@@ -186,8 +186,17 @@ class DirectoryUser {
     required this.firstName,
     required this.surname,
     required this.role,
+    this.id,
     this.collegeCode,
   });
+
+  /// The server's id, needed to open a conversation.
+  ///
+  /// Nullable because this model is also used for a search result rendered
+  /// before any conversation is possible, and for a lookup that did not find
+  /// anybody. Null is therefore "we do not know it yet", and callers that
+  /// genuinely need it must handle it rather than assume.
+  final int? id;
 
   final String username;
   final String firstName;
@@ -208,6 +217,7 @@ class DirectoryUser {
   };
 
   factory DirectoryUser.fromJson(Map<String, dynamic> json) => DirectoryUser(
+    id: json['id'] as int?,
     username: json['username'] as String? ?? '',
     firstName: json['first_name'] as String? ?? '',
     surname: json['surname'] as String? ?? '',

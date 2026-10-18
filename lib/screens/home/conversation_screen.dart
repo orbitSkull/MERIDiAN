@@ -37,14 +37,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onChanged);
-    _controller.addListener(_loadOlderWhenAtTop);
+    // A ScrollController listener, not another one on the conversation
+    // controller. Listeners on the controller fire when the *data* changes --
+    // open, refresh, send -- and never while the user scrolls, so paging back
+    // was unreachable no matter how far up they dragged.
+    _scroll.addListener(_loadOlderWhenAtTop);
     _controller.open();
   }
 
   @override
   void dispose() {
     _controller.removeListener(_onChanged);
-    _controller.removeListener(_loadOlderWhenAtTop);
+    _scroll.removeListener(_loadOlderWhenAtTop);
     _composer.dispose();
     _scroll.dispose();
     super.dispose();
@@ -60,7 +64,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
   /// Fetch older history when the user reaches the top of the list.
   ///
   /// Keyed off the scroll position rather than a button, because that is what
-  /// everybody's thumbs already expect from a chat.
+  /// everybody's thumbs already expect from a chat. The list is reversed, so
+  /// offset zero is the *oldest* end.
   void _loadOlderWhenAtTop() {
     if (!_scroll.hasClients || _scroll.offset > 80) return;
     if (!_controller.canLoadOlder || _controller.isLoadingOlder) return;

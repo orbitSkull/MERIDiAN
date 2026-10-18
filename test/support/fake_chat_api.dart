@@ -1,4 +1,5 @@
 import 'package:meridian/data/chat_models.dart';
+import 'package:meridian/models/settings.dart';
 import 'package:meridian/services/api_client.dart';
 import 'package:meridian/services/meridian_api.dart';
 
@@ -100,12 +101,36 @@ class FakeChatApi implements MeridianApi {
     return handler(conversationId, clientId, body);
   }
 
-  @override
-  Future<List<ConversationSummary>> conversations() async => conversationList;
+  /// Thrown by [openDirect], to model being blocked or refused.
+  ApiException? openDirectError;
+
+  /// The user id passed to [openDirect] on the most recent call.
+  int? openedDirectFor;
+
+  /// What [searchUsers] returns.
+  List<DirectoryUser> searchResults = const [];
 
   @override
-  Future<ConversationSummary> openDirect(int otherUserId) async =>
-      ConversationSummary(id: otherUserId, kind: 'direct');
+  Future<ConversationSummary> openDirect(int otherUserId) async {
+    openedDirectFor = otherUserId;
+    final error = openDirectError;
+    if (error != null) throw error;
+    return ConversationSummary(id: 100 + otherUserId, kind: 'direct');
+  }
+
+  @override
+  Future<UserSearch> searchUsers(String query) async {
+    final needle = query.toLowerCase();
+    return UserSearch(
+      query: query,
+      results: searchResults
+          .where((u) => u.username.toLowerCase().contains(needle))
+          .toList(),
+    );
+  }
+
+  @override
+  Future<List<ConversationSummary>> conversations() async => conversationList;
 
   @override
   Future<void> markRead(int conversationId, int upToSeq) async {}

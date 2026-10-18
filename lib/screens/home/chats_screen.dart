@@ -177,6 +177,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
           MaterialPageRoute(
             builder: (_) => NewChatScreen(
               api: widget.api,
+              chat: widget.chat,
+              myUserId: widget.myUserId,
               myUsername: widget.myUsername,
             ),
           ),

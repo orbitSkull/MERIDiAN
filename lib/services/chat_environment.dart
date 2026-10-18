@@ -46,6 +46,13 @@ class ChatEnvironment {
   final Outbox outbox;
   final ChatSync sync;
 
+  /// The client the chat screens talk to.
+  ///
+  /// Exposed because opening a conversation is not a store operation and not a
+  /// sync operation -- it is the one thing a chat screen does that has to reach
+  /// the API directly, and the environment is what owns the client.
+  MeridianApi get api => _api;
+
   Future<void> open() => store.open();
 
   /// An [OutboxSender] for whoever is signed in on this device.

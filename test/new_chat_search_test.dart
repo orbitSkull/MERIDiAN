@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/in_memory_chat_store.dart';
 import 'package:meridian/models/settings.dart';
 import 'package:meridian/models/user.dart';
 import 'package:meridian/screens/home/new_chat_screen.dart';
+import 'package:meridian/services/chat_environment.dart';
 import 'package:meridian/services/api_client.dart';
 
 import 'support/stub_meridian_api.dart';
@@ -111,7 +114,15 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(
-        home: NewChatScreen(api: api, myUsername: myUsername),
+        home: NewChatScreen(
+          api: api,
+          chat: ChatEnvironment.forTesting(
+            api: api,
+            store: InMemoryChatStore(),
+            outbox: InMemoryChatStore(),
+          ),
+          myUsername: myUsername,
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -254,7 +265,14 @@ void main() {
     expect(find.text('Aarav Sharma'), findsOneWidget);
   });
 
-  testWidgets('tapping somebody says chat is not built', (tester) async {
+  testWidgets('tapping somebody no longer says chat is not built', (
+    tester,
+  ) async {
+    // This test used to assert the snackbar saying there was no message
+    // backend. There is one now, so the assertion had to change with it --
+    // which is a good reminder that a test pinning down *absent* functionality
+    // becomes a lie the moment that functionality exists, and fails for a
+    // reason that reads like a regression rather than an improvement.
     api.answer = _results([_aarav, _kavya]);
     await open(tester);
     await type(tester, 'aar');
@@ -262,6 +280,6 @@ void main() {
     await tester.tap(find.text('Aarav Sharma'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('not built yet'), findsOneWidget);
+    expect(find.textContaining('not built yet'), findsNothing);
   });
 }

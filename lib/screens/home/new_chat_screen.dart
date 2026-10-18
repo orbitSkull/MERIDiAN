@@ -3,10 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../data/chat_models.dart';
 import '../../models/settings.dart';
 import '../../models/username.dart';
 import '../../services/api_client.dart';
+import '../../services/chat_environment.dart';
 import '../../services/meridian_api.dart';
+import '../../services/outbox.dart';
+import 'conversation_controller.dart';
+import 'conversation_screen.dart';
 
 /// New chat: find somebody to message.
 ///
@@ -24,9 +29,26 @@ import '../../services/meridian_api.dart';
 /// delivery behind this, so tapping somebody says so rather than opening an
 /// empty screen that looks like a bug.
 class NewChatScreen extends StatefulWidget {
-  const NewChatScreen({super.key, required this.api, this.myUsername});
+  const NewChatScreen({
+    super.key,
+    required this.api,
+    required this.chat,
+    this.myUserId,
+    this.myUsername,
+  });
 
   final MeridianApi api;
+
+  /// Owns the store and the client, so opening a conversation is the same
+  /// operation here as it is everywhere else.
+  ///
+  /// A parameter rather than a lookup from the provider: read inside a gesture
+  /// handler, a missing provider would not fail until somebody tapped somebody,
+  /// which is the worst possible moment to discover it.
+  final ChatEnvironment chat;
+
+  /// The signed-in user, so an optimistic bubble lands on the right side.
+  final int? myUserId;
 
   /// The signed-in handle, so the search does not list you as somebody to
   /// message. Null when unknown, which costs one row on the list.
@@ -261,13 +283,119 @@ class _NewChatScreenState extends State<NewChatScreen> {
   }
 
   void _message(DirectoryUser user) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Chatting with @${user.username} is not built yet. There is no '
-          'message backend behind this yet.',
+    final sender = widget.chat.senderFor(widget.myUserId ?? 0);
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _Opening(
+          user: user,
+          chat: widget.chat,
+          sender: sender,
+          myUserId: widget.myUserId,
         ),
       ),
+    );
+  }
+}
+
+/// Opens or reopens the direct conversation, then shows it.
+///
+/// The opening call is asynchronous and can fail -- offline, or the person has
+/// blocked you -- so it happens on a screen of its own. Pushing the
+/// conversation first and opening behind it would show a conversation that
+/// cannot be sent to and cannot be told apart from an empty one.
+///
+/// The conversation is written to the store here even when the server has no
+/// messages in it, so the chats list shows it immediately and the next sync
+/// fills it in.
+class _Opening extends StatefulWidget {
+  const _Opening({
+    required this.user,
+    required this.chat,
+    required this.sender,
+    required this.myUserId,
+  });
+
+  final DirectoryUser user;
+  final ChatEnvironment chat;
+  final OutboxSender sender;
+  final int? myUserId;
+
+  @override
+  State<_Opening> createState() => _OpeningState();
+}
+
+class _OpeningState extends State<_Opening> {
+  late final Future<ConversationSummary?> _opening = _open();
+
+  Future<ConversationSummary?> _open() async {
+    final userId = widget.user.id;
+    if (userId == null) {
+      // The id is what opening a conversation needs, and a result without one
+      // cannot be opened. Handled rather than passed as null and turned into a
+      // confusing server error.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('That person cannot be messaged from here.'),
+          ),
+        );
+      }
+      return null;
+    }
+    try {
+      final conversation = await widget.chat.api.openDirect(userId);
+      await widget.chat.store.upsertConversations([conversation]);
+      return conversation;
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error.statusCode == 403
+                  ? 'You cannot start a chat with @${widget.user.username}.'
+                  : 'Could not open that chat. ${error.message}',
+            ),
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<ConversationSummary?>(
+      future: _opening,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final conversation = snapshot.data;
+        if (conversation == null) {
+          // Nothing to show. Popping rather than leaving a blank screen is what
+          // the user tapped back expecting.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) Navigator.of(context).maybePop();
+          });
+          return const Scaffold(body: SizedBox.shrink());
+        }
+
+        return ConversationScreen(
+          controller: ConversationController(
+            conversationId: conversation.id,
+            api: widget.chat.api,
+            store: widget.chat.store,
+            outbox: widget.chat.outbox,
+            sender: widget.sender,
+            sync: widget.chat.sync,
+          ),
+          myUserId: widget.myUserId,
+        );
+      },
     );
   }
 }
