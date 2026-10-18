@@ -100,6 +100,7 @@ abstract class MeridianApi {
     int conversationId, {
     required String clientId,
     required String body,
+    int? attachmentId,
   });
 
   /// Open, or reopen, the direct conversation with somebody.

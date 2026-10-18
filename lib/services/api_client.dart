@@ -562,12 +562,20 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
     int conversationId, {
     required String clientId,
     required String body,
+    int? attachmentId,
   }) async {
     await loadAccessToken();
     final response = await _guard(
       () => _dio.post<Map<String, dynamic>>(
         '/conversations/$conversationId/messages',
-        data: {'client_id': clientId, 'body': body},
+        data: {
+          'client_id': clientId,
+          'body': body,
+          // Null is omitted rather than sent as null, because the field is
+          // extra="forbid" on the server and an explicit null is not the same as
+          // leaving it out.
+          'attachment_id': ?attachmentId,
+        },
       ),
     );
     final data = response.data;

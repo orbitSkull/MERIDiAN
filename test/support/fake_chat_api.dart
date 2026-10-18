@@ -89,13 +89,20 @@ class FakeChatApi implements MeridianApi {
     int conversationId, {
     required String clientId,
     required String body,
+    int? attachmentId,
   }) {
     sendCount++;
     sendClientIds.add(clientId);
     final handler = onSend;
     if (handler == null) {
       return Future.value(
-        serverMessage(id: sendCount, seq: sendCount, clientId: clientId, body: body),
+        serverMessage(
+          id: sendCount,
+          seq: sendCount,
+          clientId: clientId,
+          body: body,
+          attachmentId: attachmentId,
+        ),
       );
     }
     return handler(conversationId, clientId, body);
@@ -135,6 +142,31 @@ class FakeChatApi implements MeridianApi {
   @override
   Future<void> markRead(int conversationId, int upToSeq) async {}
 
+  /// Files the "server" has stored, newest last.
+  final List<MediaUpload> uploads = [];
+
+  /// Set to make the next upload fail.
+  ApiException? uploadError;
+
+  @override
+  Future<MediaUpload> uploadMedia({
+    required List<int> bytes,
+    required String mime,
+    String filename = 'upload',
+  }) async {
+    final failure = uploadError;
+    if (failure != null) throw failure;
+    final upload = MediaUpload(
+      id: uploads.length + 1,
+      kind: 'image',
+      mime: mime,
+      byteSize: bytes.length,
+      expiresAt: DateTime.utc(2026, 3, 8),
+    );
+    uploads.add(upload);
+    return upload;
+  }
+
   // Everything else is not messaging. Left unimplemented so a test that reaches
   // for one fails loudly instead of quietly getting null.
 
@@ -150,6 +182,7 @@ ChatMessage serverMessage({
   required int seq,
   required String clientId,
   required String body,
+  int? attachmentId,
   int conversationId = 1,
   int senderId = 7,
   MessageSendState state = MessageSendState.sent,
@@ -162,7 +195,8 @@ ChatMessage serverMessage({
     clientId: clientId,
     seq: seq,
     body: body,
-    kind: 'text',
+    attachmentId: attachmentId,
+    kind: attachmentId == null ? 'text' : 'media',
     senderId: senderId,
     createdAt: DateTime.utc(2026, 3, 1).add(Duration(seconds: seq)),
     expiresAt: DateTime.utc(2026, 3, 29),

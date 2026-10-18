@@ -4,6 +4,14 @@
          manifests, which means a release build has no network access at all. -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- Reading a picked photograph.
+         Not declared here because image_picker already declares it in its own
+         manifest with android:maxSdkVersion="32", and the merger combines the
+         two. Android 13 and up hand out the system photo picker, which needs no
+         storage permission at all; only the older path does. Duplicating it here
+         without the cap would ask for broad storage access that Android 13 no
+         longer grants and that this app has no other reason to want. -->
+
     <application
         android:label="MERIDiAN"
         android:name="${applicationName}"

@@ -221,15 +221,22 @@ class OutboxSender {
     return Duration(milliseconds: base.inMilliseconds + offset);
   }
 
-  String _newClientId() {
-    // A v4-shaped random id rather than a monotonic counter: two devices must be
-    // able to produce the same id space without coordinating, and the server
-    // looks this up across every conversation.
-    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
-        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
-  }
+  String _newClientId() => newClientId(_random);
+}
+/// A v4-shaped random id for a message this device is about to send.
+///
+/// A random id rather than a monotonic counter: two devices must be able to
+/// produce ids in the same space without coordinating, and the server looks
+/// these up across every conversation rather than per sender.
+///
+/// Shared rather than kept inside [OutboxSender] because a media send also needs
+/// one, and two copies of an id generator is how a client ends up sending
+/// photographs twice because one of them forgot the version bits.
+String newClientId(Random random) {
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+      '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
 }

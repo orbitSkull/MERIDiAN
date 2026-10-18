@@ -3,6 +3,7 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -303,6 +304,64 @@ class ConversationController extends ChangeNotifier {
   void reportTyping(bool typing) {
     _realtime?.sendTyping(conversationId, typing: typing);
   }
+
+  // ------------------------------------------------------------------
+  // media
+
+  /// Send a photograph, with an optional caption.
+  ///
+  /// Two requests: upload the bytes, then send the message naming the file. Not
+  /// three -- there is no separate attach step, because the server binds them in
+  /// one transaction and a client that does it in three has a window where the
+  /// message exists and the picture does not.
+  ///
+  /// Deliberately not queued in the outbox. A queued send is a row of text and a
+  /// client_id; this needs the bytes, and the picker has long since released the
+  /// file handle by the time a phone that has been offline for an hour comes
+  /// back. Pretending to queue it would mean copying every photograph onto the
+  /// device's disk to retry later, so a media send needs a connection and says
+  /// so plainly rather than pretending otherwise.
+  ///
+  /// Returns null on success, or a sentence fit to show the user.
+  Future<String?> sendWithMedia({
+    required List<int> bytes,
+    required String mime,
+    String caption = '',
+  }) async {
+    try {
+      final upload = await _api.uploadMedia(
+        bytes: bytes,
+        mime: mime,
+        filename: 'photo.${mime.contains('png') ? 'png' : 'jpg'}',
+      );
+      // Straight through the API rather than the outbox, for the reason above.
+      final message = await _api.sendMessage(
+        conversationId,
+        clientId: _newClientId(),
+        body: caption.trim(),
+        attachmentId: upload.id,
+      );
+      await _store.upsertMessages([message]);
+      await _reload();
+      _notify();
+      unawaited(refresh());
+      return null;
+    } on ApiException catch (error) {
+      if (error.statusCode == 413) {
+        return 'That file is too large to send.';
+      }
+      if (error.statusCode == 415) {
+        return 'That kind of file cannot be sent in a chat.';
+      }
+      if (error.statusCode == 410) {
+        return 'That photo has expired.';
+      }
+      return error.message;
+    }
+  }
+
+  /// A fresh idempotency key, from the same generator the outbox uses.
+  static String _newClientId() => newClientId(Random());
 
   // ------------------------------------------------------------------
   // groups

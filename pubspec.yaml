@@ -36,6 +36,13 @@ dependencies:
   cupertino_icons: ^1.0.8
   dio: ^5.11.1
   flutter_secure_storage: ^11.2.0
+  # Picks a photo and, on the native side, rescales and re-encodes it.
+  #
+  # The rescaling is the point of using this rather than reading bytes off the
+  # file: a modern phone camera produces 8-12 MB images, the server refuses
+  # anything over 10 MB, and doing the shrink natively avoids both the upload
+  # and the memory spike of holding the original in Dart.
+  image_picker: ^1.1.2
   path_provider: ^2.1.6
   provider: ^6.1.5+1
   shared_preferences: ^2.5.6

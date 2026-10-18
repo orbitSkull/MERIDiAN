@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../data/chat_models.dart';
 import '../../data/media_cache.dart';
@@ -35,6 +36,11 @@ class ConversationScreen extends StatefulWidget {
 class _ConversationScreenState extends State<ConversationScreen> {
   final TextEditingController _composer = TextEditingController();
   final ScrollController _scroll = ScrollController();
+
+  /// Lazily created so a preview that never taps the button never touches the
+  /// platform channel.
+  ImagePicker? _picker;
+  bool _sendingPhoto = false;
 
   ConversationController get _controller => widget.controller;
 
@@ -80,8 +86,74 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (text.trim().isEmpty) return;
     _composer.clear();
     await _controller.send(text);
-    if (!_scroll.hasClients) return;
     // Anchored to the bottom so the message just sent is visible.
+    await _scrollToNewest();
+  }
+
+  /// The longest edge a sent photograph is allowed to have.
+  ///
+  /// A chat photo is not a photograph. Anything much larger than this is pixels
+  /// nobody will see on the phone they are looking at, sent over a connection
+  /// that has to carry it before the server will accept it.
+  static const _maxEdge = 1920.0;
+
+  /// Pick a photograph and send it, with whatever is in the composer as a
+  /// caption.
+  ///
+  /// The picker is asked to shrink and re-encode natively rather than reading a
+  /// 12 MB original into Dart and compressing it there: a phone photo is
+  /// routinely over the server's ceiling, and a shrink that happens after the
+  /// bytes are in memory has already cost what it was meant to save.
+  Future<void> _attachPhoto() async {
+    if (_sendingPhoto) return;
+    final picker = _picker ??= ImagePicker();
+
+    final XFile? picked;
+    try {
+      picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: _maxEdge,
+        maxHeight: _maxEdge,
+        imageQuality: 82,
+      );
+    } on Exception catch (error) {
+      if (!mounted) return;
+      // A denied permission arrives as a platform exception. It says so
+      // plainly, because the fix is in system settings and the person has to go
+      // and do it themselves.
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not open photos. $error')));
+      return;
+    }
+    // Null is a cancelled picker, which is not a failure and gets no message.
+    if (picked == null || !mounted) return;
+
+    final caption = _composer.text.trim();
+    setState(() => _sendingPhoto = true);
+    final failure = await _controller.sendWithMedia(
+      bytes: await picked.readAsBytes(),
+      mime: picked.mimeType ?? 'image/jpeg',
+      caption: caption,
+    );
+    if (!mounted) return;
+    setState(() => _sendingPhoto = false);
+
+    if (failure != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failure)));
+      // The caption stays where it was when the send failed. A photograph that
+      // did not go should not also cost the person what they typed.
+      return;
+    }
+    _composer.clear();
+    _controller.reportTyping(false);
+    await _scrollToNewest();
+  }
+
+  Future<void> _scrollToNewest() async {
+    if (!_scroll.hasClients) return;
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (_scroll.hasClients) {
       await _scroll.animateTo(
@@ -227,6 +299,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
               controller: _composer,
               onSend: _send,
               onChanged: (text) => _controller.reportTyping(text.trim().isNotEmpty),
+              onAttach: _attachPhoto,
+              sending: _sendingPhoto,
               hint: 'Message',
             ),
           ],
@@ -1426,6 +1500,8 @@ class _Composer extends StatelessWidget {
     required this.onSend,
     required this.hint,
     this.onChanged,
+    this.onAttach,
+    this.sending = false,
   });
 
   final TextEditingController controller;
@@ -1436,16 +1512,36 @@ class _Composer extends StatelessWidget {
   /// throttles before it reaches the network.
   final ValueChanged<String>? onChanged;
 
+  /// Open the photo picker. Null disables the button, which is how a preview
+  /// without a picker is drawn rather than crashing on tap.
+  final Future<void> Function()? onAttach;
+
+  /// True while a photograph is being uploaded, so the button cannot be pressed
+  /// twice and send two copies.
+  final bool sending;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        padding: const EdgeInsets.fromLTRB(6, 6, 12, 10),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            IconButton(
+              onPressed: onAttach == null || sending ? null : onAttach,
+              icon: sending
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2.2),
+                    )
+                  : const Icon(Icons.add_photo_alternate_outlined),
+              tooltip: 'Send a photo',
+              color: scheme.onSurfaceVariant,
+            ),
             Expanded(
               child: TextField(
                 controller: controller,
