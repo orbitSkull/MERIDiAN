@@ -12,7 +12,12 @@ plugins {
 }
 
 android {
-    namespace = "com.example.meridian"
+    // Must match the Kotlin package of MainActivity, and must match the package
+    // name registered in Firebase for push. Firebase treats it as permanent: a
+    // different applicationId is a different app as far as FCM is concerned, so
+    // changing one without the other means notifications that never arrive and no
+    // error explaining why.
+    namespace = "com.meridian.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,8 +27,9 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.meridian"
+        // The published identity of the app. Firebase's "Add app -> Android"
+        // step asks for exactly this string, and it cannot be edited afterwards.
+        applicationId = "com.meridian.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
