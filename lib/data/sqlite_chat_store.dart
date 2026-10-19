@@ -322,13 +322,25 @@ class SqliteChatStore implements ChatStore, Outbox {
         ? const [MessageSendState.sent, MessageSendState.delivered]
         : const [MessageSendState.sent];
 
-    await _db.update(
-      'messages',
-      {'state': target.name},
-      where: 'conversation_id = ? AND sender_id != ? AND seq IS NOT NULL '
-          'AND seq <= ? AND state IN (${eligible.map((_) => '?').join(',')})',
-      whereArgs: [conversationId, userId, upToSeq, ...eligible.map((s) => s.name)],
-    );
+    await _db.transaction((txn) async {
+      await txn.update(
+        'messages',
+        {'state': target.name},
+        where: 'conversation_id = ? AND sender_id != ? AND seq IS NOT NULL '
+            'AND seq <= ? AND state IN (${eligible.map((_) => '?').join(',')})',
+        whereArgs: [conversationId, userId, upToSeq, ...eligible.map((s) => s.name)],
+      );
+
+      // When messages are read, clear the unread count for this conversation.
+      if (read) {
+        await txn.update(
+          'conversations',
+          {'unread_count': 0},
+          where: 'id = ?',
+          whereArgs: [conversationId],
+        );
+      }
+    });
   }
 
   @override
@@ -354,6 +366,36 @@ class SqliteChatStore implements ChatStore, Outbox {
     batch.delete('conversations');
     batch.delete('outbox');
     await batch.commit(noResult: true);
+  }
+
+  @override
+  Future<void> updateConversationSummary({
+    required int conversationId,
+    String? preview,
+    int? unreadDelta,
+    DateTime? lastMessageAt,
+  }) async {
+    final updates = <String, Object?>{};
+    if (preview != null) updates['preview'] = preview;
+    if (lastMessageAt != null) updates['last_message_at'] = lastMessageAt.millisecondsSinceEpoch;
+    if (updates.isEmpty && unreadDelta == null) return;
+
+    await _db.transaction((txn) async {
+      if (updates.isNotEmpty) {
+        await txn.update(
+          'conversations',
+          updates,
+          where: 'id = ?',
+          whereArgs: [conversationId],
+        );
+      }
+      if (unreadDelta != null) {
+        await txn.rawUpdate(
+          'UPDATE conversations SET unread_count = unread_count + ? WHERE id = ?',
+          [unreadDelta, conversationId],
+        );
+      }
+    });
   }
 
   // ------------------------------------------------------------------

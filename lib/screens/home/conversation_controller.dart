@@ -211,6 +211,20 @@ class ConversationController extends ChangeNotifier {
     }
 
     await _store.upsertMessages([message]);
+
+    // Update conversation list: preview, unread count, last message time.
+    // Only increment unread if the message is from someone else.
+    final isMine = message.senderId == myUserId;
+    final preview = message.body.isEmpty
+        ? (message.kind == 'media' ? '📷 Photo' : '')
+        : message.body;
+    await _store.updateConversationSummary(
+      conversationId: conversationId,
+      preview: preview,
+      unreadDelta: isMine ? null : 1,
+      lastMessageAt: message.createdAt,
+    );
+
     print('[Realtime] Message upserted, reloading...');
     await _reload();
     _notify();

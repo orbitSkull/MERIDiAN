@@ -255,6 +255,30 @@ class ConversationSummary {
 
   bool get isGroup => kind == 'group';
 
+  ConversationSummary copyWith({
+    int? id,
+    String? kind,
+    String? title,
+    String? avatarUrl,
+    int? lastSeq,
+    DateTime? lastMessageAt,
+    int? unreadCount,
+    String? preview,
+    List<ConversationMember>? members,
+  }) {
+    return ConversationSummary(
+      id: id ?? this.id,
+      kind: kind ?? this.kind,
+      title: title ?? this.title,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      lastSeq: lastSeq ?? this.lastSeq,
+      lastMessageAt: lastMessageAt ?? this.lastMessageAt,
+      unreadCount: unreadCount ?? this.unreadCount,
+      preview: preview ?? this.preview,
+      members: members ?? this.members,
+    );
+  }
+
   /// The owner, or null for a direct conversation or a roster not yet fetched.
   ConversationMember? get owner {
     for (final member in members) {

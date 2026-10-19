@@ -166,6 +166,14 @@ class InMemoryChatStore implements ChatStore, Outbox {
 
       _messages[i] = message.copyWith(state: next);
     }
+
+    // When messages are read, clear the unread count for this conversation.
+    if (read) {
+      await updateConversationSummary(
+        conversationId: conversationId,
+        unreadDelta: -999, // will clamp to 0
+      );
+    }
   }
 
   @override
@@ -174,6 +182,23 @@ class InMemoryChatStore implements ChatStore, Outbox {
     _messages.clear();
     _conversations.clear();
     _outbox.clear();
+  }
+
+  @override
+  Future<void> updateConversationSummary({
+    required int conversationId,
+    String? preview,
+    int? unreadDelta,
+    DateTime? lastMessageAt,
+  }) async {
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    if (index < 0) return;
+    final current = _conversations[index];
+    _conversations[index] = current.copyWith(
+      preview: preview ?? current.preview,
+      unreadCount: (unreadDelta != null ? current.unreadCount + unreadDelta : current.unreadCount).clamp(0, 999),
+      lastMessageAt: lastMessageAt ?? current.lastMessageAt,
+    );
   }
 
   // ------------------------------------------------------------------

@@ -6,6 +6,7 @@ import '../../data/chat_models.dart';
 import '../../services/api_client.dart';
 import '../../services/chat_environment.dart';
 import '../../services/meridian_api.dart';
+import '../../services/realtime_client.dart';
 import 'conversation_controller.dart';
 import 'conversation_screen.dart';
 import 'new_chat_screen.dart';
@@ -42,12 +43,31 @@ class _ChatsScreenState extends State<ChatsScreen> {
   List<ConversationSummary> _conversations = const [];
   String _query = '';
   bool _syncing = false;
+  StreamSubscription<RealtimeEvent>? _realtimeSub;
 
   @override
   void initState() {
     super.initState();
     unawaited(_load());
     unawaited(_refresh());
+    _listenRealtime();
+  }
+
+  void _listenRealtime() {
+    final realtime = widget.chat.realtime;
+    if (realtime == null) return;
+    _realtimeSub = realtime.events.listen((event) {
+      if (event is RealtimeMessage || event is RealtimeReceipt) {
+        // A message arrived or a receipt moved - reload to update preview/unread.
+        unawaited(_load());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {

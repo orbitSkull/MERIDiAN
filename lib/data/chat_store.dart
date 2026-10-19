@@ -89,6 +89,15 @@ abstract class ChatStore {
   /// Wipe everything. Used on sign-out: another person's messages must not be
   /// readable by whoever signs in next on the same device.
   Future<void> clear();
+
+  /// Update the conversation summary (preview, unread count, last message time)
+  /// when a new message arrives or is read.
+  Future<void> updateConversationSummary({
+    required int conversationId,
+    String? preview,
+    int? unreadDelta,
+    DateTime? lastMessageAt,
+  });
 }
 
 /// The queue of messages that have not reached the server yet.
