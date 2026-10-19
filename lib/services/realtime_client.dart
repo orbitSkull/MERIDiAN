@@ -383,13 +383,20 @@ class RealtimeClient {
     print('[RealtimeClient] _pump: starting to listen for events');
     _subscription = channel.stream.listen(
       (raw) {
-        print('[RealtimeClient] _pump: raw event received: $raw');
-        final event = _decode(raw);
-        if (event == null) return;
-        final translated = _translate(event);
-        if (translated != null) {
-          print('[RealtimeClient] _pump: translated event: ${translated.runtimeType}');
-          _events.add(translated);
+        try {
+          print('[RealtimeClient] _pump: raw event received: $raw');
+          final event = _decode(raw);
+          if (event == null) return;
+          final translated = _translate(event);
+          if (translated != null) {
+            print('[RealtimeClient] _pump: translated event: ${translated.runtimeType}');
+            _events.add(translated);
+          }
+        } catch (e, st) {
+          print('[RealtimeClient] _pump: ERROR in onData: $e\n$st');
+          _connected = false;
+          _events.add(const RealtimeStatus(connected: false, detail: 'failed'));
+          if (!completer.isCompleted) completer.completeError(e, st);
         }
       },
       onDone: () {
@@ -398,15 +405,20 @@ class RealtimeClient {
         _events.add(const RealtimeStatus(connected: false, detail: 'closed'));
         if (!completer.isCompleted) completer.complete();
       },
-      onError: (Object e) {
-        print('[RealtimeClient] _pump: stream error: $e');
+      onError: (Object e, StackTrace st) {
+        print('[RealtimeClient] _pump: stream error: $e\n$st');
         _connected = false;
         _events.add(const RealtimeStatus(connected: false, detail: 'failed'));
-        if (!completer.isCompleted) completer.complete();
+        if (!completer.isCompleted) completer.completeError(e, st);
       },
       cancelOnError: true,
     );
-    await completer.future;
+    try {
+      await completer.future;
+    } catch (e, st) {
+      print('[RealtimeClient] _pump: completer error: $e\n$st');
+      rethrow;
+    }
     print('[RealtimeClient] _pump: completed');
   }
 
