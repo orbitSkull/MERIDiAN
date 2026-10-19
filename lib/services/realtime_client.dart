@@ -100,9 +100,10 @@ class _ChannelSocket implements RealtimeSocket {
   _ChannelSocket(this._channel);
 
   final WebSocketChannel _channel;
+  late final Stream<dynamic> _broadcastStream = _channel.stream.asBroadcastStream();
 
   @override
-  Stream<dynamic> get stream => _channel.stream;
+  Stream<dynamic> get stream => _broadcastStream;
 
   @override
   void send(String text) => _channel.sink.add(text);
