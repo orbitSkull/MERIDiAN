@@ -97,7 +97,15 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
         // that came back. Announced on both paths so "offline" clears the moment
         // one request succeeds, rather than needing a separate probe that would
         // cost a round trip of its own.
-        onResponse: (_, _) => _connectivity?.report(succeeded: true),
+        onResponse: (response, handler) {
+          _connectivity?.report(succeeded: true);
+          // Mandatory, and the single most dangerous line in this file if it is
+          // wrong: an interceptor that does not call handler.next() does not
+          // merely fail, it *stops the chain*, and the request never completes.
+          // Written as an expression returning the report's value it swallowed
+          // every response in the app, so sign-in and registration spun forever.
+          handler.next(response);
+        },
       ),
     );
   }
