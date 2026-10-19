@@ -140,6 +140,9 @@ class ConversationController extends ChangeNotifier {
   /// Only while the socket is down, and only while this screen is open, so a
   /// working connection pays nothing for it.
   void _startFallbackPoll() {
+    // No realtime = no fallback needed (tests, offline scenarios handled elsewhere).
+    if (_realtime == null) return;
+
     _poll?.cancel();
     _poll = Timer.periodic(const Duration(seconds: 20), (_) async {
       if (_disposed || _loading) return;
@@ -548,6 +551,8 @@ class ConversationController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _poll?.cancel();
+    _poll = null;
     _typingTimeout?.cancel();
     unawaited(_events?.cancel());
     _events = null;
