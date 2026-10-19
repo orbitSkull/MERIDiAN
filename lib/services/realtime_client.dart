@@ -334,16 +334,41 @@ class RealtimeClient {
       print('[RealtimeClient] _attemptConnection: sending auth');
       channel.send(jsonEncode({'type': 'auth', 'token': token}));
 
-      final ready = await channel.stream
-          .map(_decode)
-          .where((event) => event != null)
-          .cast<Map<String, dynamic>>()
-          .first
-          .timeout(_handshakeTimeout);
+      // Wait for the 'ready' frame using a completer, without consuming the stream.
+      final readyCompleter = Completer<Map<String, dynamic>>();
+      StreamSubscription<dynamic>? handshakeSub;
+      handshakeSub = channel.stream.listen(
+        (raw) {
+          final event = _decode(raw);
+          if (event == null) return;
+          if (event['type'] == 'ready') {
+            if (!readyCompleter.isCompleted) readyCompleter.complete(event);
+            handshakeSub?.cancel();
+          }
+        },
+        onError: (e) {
+          if (!readyCompleter.isCompleted) readyCompleter.completeError(e);
+        },
+        onDone: () {
+          if (!readyCompleter.isCompleted) readyCompleter.completeError(StateError('Socket closed before ready'));
+        },
+        cancelOnError: true,
+      );
+
+      Map<String, dynamic> ready;
+      try {
+        ready = await readyCompleter.future.timeout(_handshakeTimeout);
+      } on TimeoutException {
+        await handshakeSub?.cancel();
+        await _closeChannel();
+        return false;
+      } catch (e) {
+        await handshakeSub?.cancel();
+        await _closeChannel();
+        return false;
+      }
 
       if (ready['type'] != 'ready') {
-        // Rejected. One refresh and one more try, because the usual cause is an
-        // access token that aged out rather than a broken socket.
         if (mayRefresh) {
           final refreshed = await _api.tryRefresh();
           if (refreshed) {
