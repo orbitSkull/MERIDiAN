@@ -81,8 +81,11 @@ class ChatEnvironment {
   /// Both, together, because a socket writing into a store that is not open yet
   /// is a race nobody would notice until a message went missing.
   Future<void> open() async {
+    print('[ChatEnvironment] open() called');
     await store.open();
+    print('[ChatEnvironment] store opened, starting realtime');
     realtime.start();
+    print('[ChatEnvironment] realtime.start() called');
   }
 
   /// Hold the socket while the app is in the background.

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -109,20 +111,22 @@ class _SessionGateState extends State<SessionGate> {
         // event can write into it, and the socket has to be started by somebody
         // who knows there is a session -- otherwise it spends its life
         // reconnecting to a server that will not accept it.
-        if (status != _openedFor) {
+if (status != _openedFor) {
           _openedFor = status;
           if (status == SessionStatus.signedIn ||
               status == SessionStatus.signedInOffline) {
-            context
-                .read<ChatEnvironmentHolder>()
-                .environment
-                .open()
-                .catchError((Object error) {
-                  // A database that will not open is fatal for chat, but not
-                  // for the app: the user can still read their profile and
-                  // change settings. Logged rather than fatal on purpose.
-                  debugPrint('Could not open the chat store: $error');
-});
+            unawaited(
+              context
+                  .read<ChatEnvironmentHolder>()
+                  .environment
+                  .open()
+                  .catchError((Object error) {
+                    // A database that will not open is fatal for chat, but not
+                    // for the app: the user can still read their profile and
+                    // change settings. Logged rather than fatal on purpose.
+                    debugPrint('Could not open the chat store: $error');
+                  }),
+            );
           }
 
           // A notification tapped before there was a session -- the common case,
