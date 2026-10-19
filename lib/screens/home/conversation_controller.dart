@@ -87,6 +87,9 @@ class ConversationController extends ChangeNotifier {
   StreamSubscription<RealtimeEvent>? _events;
   Timer? _typingTimeout;
 
+  /// Fallback poll, running only while the socket is down.
+  Timer? _poll;
+
   List<ChatMessage> get messages => _messages;
   ConversationSummary? get conversation => _conversation;
   bool get isLoading => _loading;
@@ -115,10 +118,34 @@ class ConversationController extends ChangeNotifier {
     await _reload();
     _loading = false;
     _notify();
+    _startFallbackPoll();
 
     // Best effort: the conversation is already on screen from SQLite, so a
     // failure here is not an error to show, it is just not up to date yet.
     unawaited(refresh());
+  }
+
+  /// Poll while the socket is not connected.
+  ///
+  /// A live message normally arrives over the WebSocket within a second. When
+  /// that does not happen the delivery is not retried by anything: the sender
+  /// has already been told the message went, so a receiver whose socket is
+  /// broken simply never sees it, and there is no error anywhere -- which is
+  /// the worst shape a bug can have.
+  ///
+  /// It happens for ordinary reasons too: a phone that slept through a
+  /// reconnect, a network handover, and a server running more than one instance
+  /// where the sender's request and the receiver's socket are on different ones.
+  ///
+  /// Only while the socket is down, and only while this screen is open, so a
+  /// working connection pays nothing for it.
+  void _startFallbackPoll() {
+    _poll?.cancel();
+    _poll = Timer.periodic(const Duration(seconds: 20), (_) async {
+      if (_disposed || _loading) return;
+      if (_realtime?.isConnected ?? false) return;
+      await refresh();
+    });
   }
 
   void _listen() {
@@ -246,9 +273,30 @@ class ConversationController extends ChangeNotifier {
     _syncing = true;
     _notify();
     try {
-      await _sync.syncConversation(conversationId);
-      await _sender.flush();
-      await _markRead();
+      // Each step guarded separately.
+      //
+      // They were in sequence, so a throw from the first skipped the second --
+      // and the second is the outbox flush, which is what actually sends a
+      // retried message. A conversation that fails to sync is exactly the one
+      // somebody is most likely to be retrying in, so the failure that motivated
+      // the retry was the failure that prevented it.
+      try {
+        await _sync.syncConversation(conversationId);
+      } on Object catch (error) {
+        debugPrint('Sync failed: $error');
+      }
+
+      try {
+        await _sender.flush();
+      } on Object catch (error) {
+        debugPrint('Outbox flush failed: $error');
+      }
+
+      try {
+        await _markRead();
+      } on Object catch (error) {
+        debugPrint('Mark-read failed: $error');
+      }
     } finally {
       _syncing = false;
       await _reload();
