@@ -55,8 +55,40 @@ class _ConversationScreenState extends State<ConversationScreen> {
   ///
   /// Read from [ConnectivityMonitor] rather than kept here, so there is one
   /// answer to "are we online" rather than one per screen that can disagree.
-  bool get _isOnline =>
-      context.read<ConnectivityMonitor?>()?.isOnline ?? true;
+  /// The connection state this screen draws with.
+  ///
+  /// Held and listened to rather than read inline. `context.read` takes a value
+  /// once and never again, so the send button was built from whatever the radio
+  /// happened to say during the first frame and then never changed -- which is
+  /// how it ended up stuck disabled on a phone with a perfectly good
+  /// connection.
+  ConnectivityMonitor? _connectivity;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final monitor = context.read<ConnectivityMonitor?>();
+    if (identical(monitor, _connectivity)) return;
+    _connectivity?.removeListener(_onConnectivityChanged);
+    _connectivity = monitor;
+    monitor?.addListener(_onConnectivityChanged);
+  }
+
+  void _onConnectivityChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Whether to draw the app as though it can reach the network.
+  ///
+  /// Optimistic until something has actually answered. The alternative -- an
+  /// unmonitored screen reads as offline -- means the first frame of every
+  /// conversation opens with the send button greyed out, and on a device where
+  /// the plugin returns nothing at all it would stay that way permanently.
+  bool get _isOnline {
+    final monitor = _connectivity;
+    if (monitor == null || !monitor.isKnown) return true;
+    return monitor.isOnline;
+  }
 
   ConversationController get _controller => widget.controller;
 
@@ -95,6 +127,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void dispose() {
     _controller.removeListener(_onChanged);
     _scroll.removeListener(_loadOlderWhenAtTop);
+    _connectivity?.removeListener(_onConnectivityChanged);
     _composer.dispose();
     _scroll.dispose();
     super.dispose();
@@ -885,12 +918,18 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
         _gone = members == null;
       });
       if (_gone) Navigator.of(context).maybePop();
-    } on ApiException catch (error) {
+    } on Object catch (error) {
+      // Every failure, not just ApiException.
+      //
+      // This screen opens from a chat header that the person has already found
+      // working, so anything that escapes here turns a tap into a crash. A
+      // narrow catch made an unexpected error -- a stubbed client, a malformed
+      // payload -- take the whole screen down with it.
       if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      ).showSnackBar(SnackBar(content: Text('Could not load the group. $error')));
     }
   }
 
@@ -903,11 +942,14 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
     setState(() => _busy = true);
     try {
       await action();
-    } on ApiException catch (error) {
+    } on Object catch (error) {
+      // Rename, add and leave all come through here, and each one is a button
+      // somebody pressed deliberately. An error must be reported, not thrown at
+      // them as a red screen.
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(error.message)));
+        ).showSnackBar(SnackBar(content: Text('$error')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
