@@ -204,7 +204,12 @@ class ConversationController extends ChangeNotifier {
   Future<void> _reload() async {
     final loaded = await _store.messages(conversationId);
     _messages = loaded;
-    _conversation = await _store.conversation(conversationId);
+    _conversation ??= await _store.conversation(conversationId);
+    // Fetched once, and only when the device has never seen it. Without this a
+    // conversation opened straight after it was created -- before any sync has
+    // written it to the conversations table -- has no kind, so the bubbles do
+    // not know they are in a group and quietly print no sender names.
+    _conversation ??= await _describeQuietly();
     // A full page means there may be more on this device; a short one means the
     // device has run out.
     //
@@ -213,6 +218,27 @@ class ConversationController extends ChangeNotifier {
     // for a device holding exactly a page's worth of history -- so older messages
     // could never be fetched, by any route.
     _canLoadOlder = loaded.length >= ChatSync.pageSize;
+  }
+
+  /// One request for the conversation's own details, swallowing failure.
+  ///
+  /// Not allowed to throw: this runs on the path that draws the screen, and a
+  /// conversation the server will not describe is still a conversation whose
+  /// messages are sitting on the device and should be shown.
+  Future<ConversationSummary?> _describeQuietly() async {
+    try {
+      return await _api.conversation(conversationId);
+    } on Object {
+      // Any failure at all. This sits on the path that draws the screen, and a
+      // conversation the server will not describe is still a conversation whose
+      // messages are sitting on the device and should be shown.
+      //
+      // Deliberately not narrowed to ApiException: the only thing this needs to
+      // guarantee is that it cannot break the screen, and every extra type that
+      // can arrive -- a stubbed client in a test, a platform channel, a
+      // malformed response -- is the same failure for this purpose.
+      return null;
+    }
   }
 
   /// Pull the server's view, and send anything queued.
@@ -326,13 +352,14 @@ class ConversationController extends ChangeNotifier {
   Future<String?> sendWithMedia({
     required List<int> bytes,
     required String mime,
+    String filename = 'photo.jpg',
     String caption = '',
   }) async {
     try {
       final upload = await _api.uploadMedia(
         bytes: bytes,
         mime: mime,
-        filename: 'photo.${mime.contains('png') ? 'png' : 'jpg'}',
+        filename: filename,
       );
       // Straight through the API rather than the outbox, for the reason above.
       final message = await _api.sendMessage(

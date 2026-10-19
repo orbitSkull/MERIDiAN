@@ -1,48 +1,83 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:path_provider/path_provider.dart';
 
 import '../services/api_client.dart';
 import '../services/meridian_api.dart';
 
-/// Short-lived links to media, remembered until they lapse.
+/// Photographs, kept on disk so they are there without a network.
 ///
-/// Every link is issued against a membership check and dies after a few
-/// minutes, so an image list has two costs to avoid paying on every rebuild:
-/// asking the server again for a link it already gave out, and decoding the same
-/// photograph again because the widget was rebuilt.
+/// The problem this solves: a signed link lasts five minutes and an offline
+/// device cannot get one at all. So a photo that is only ever a URL is a photo
+/// that disappears the moment the phone loses signal -- which means "offline
+/// viewing", the thing everybody expects a chat app to do, quietly does not
+/// work for messages carrying images.
 ///
-/// Links are kept per media id rather than per widget, because the same
-/// photograph appears in more than one place at once and a cache keyed by widget
-/// would fetch it once per place.
+/// Every file downloaded once is written under the app's support directory,
+/// keyed by media id. That directory is the app's own, not the gallery, so the
+/// user is not accumulating copies of other people's photographs in their
+/// camera roll and the files go when the app is removed.
 ///
-/// A link is discarded slightly before it actually expires. Fetching one at the
-/// last moment and having it die mid-decode shows a broken image, and the cost of
-/// asking again thirty seconds early is one request.
+/// Media expires server-side after seven days, so nothing here is an archive
+/// that will quietly outlive its own permission to exist; the retention pass on
+/// the server drops the rows and the bytes stop being reachable.
 class MediaCache {
-  MediaCache(this._api);
+  MediaCache(this._api, {Directory? directory}) : _overrideDirectory = directory;
 
   final MeridianApi _api;
+
+  /// Where files go, when the caller knows.
+  ///
+  /// Injectable because the real location needs a platform channel, and a cache
+  /// whose only test is "does it work on a phone" is a cache nobody runs the
+  /// tests for. Null in production, which asks the platform.
+  final Directory? _overrideDirectory;
+
+  /// Links we have been given, and when each stops being useful.
   final Map<int, _Link> _links = {};
 
-  /// In-flight requests, so ten bubbles for one photograph make one call.
-  final Map<int, Future<String?>> _pending = {};
+  /// Downloads in flight, so ten bubbles showing one photograph make one
+  /// request rather than ten.
+  final Map<int, Future<File?>> _pending = {};
 
   /// How long before real expiry a link is treated as spent.
   static const _safetyMargin = Duration(seconds: 45);
 
-  /// The current link for [mediaId], fetching one if there is none worth having.
+  /// Whether a file is already on disk.
   ///
-  /// Null means the server declined: the file expired, or the person asking is
-  /// not in the conversation. Both are rendered as a placeholder rather than as
-  /// an error, because from the reader's side they are the same thing -- there is
-  /// nothing there to show.
-  Future<String?> urlFor(int mediaId) async {
-    final held = _links[mediaId];
-    if (held != null && held.isUsable) return held.url;
+  /// Synchronous on purpose: this is called during build, and answering "have we
+  /// got it" should not need a microtask before a placeholder can be skipped.
+  File? cachedFile(int mediaId) {
+    final path = _paths[mediaId];
+    if (path == null) return null;
+    final file = File(path);
+    return file.existsSync() ? file : null;
+  }
+
+  /// Whether we have already looked, so an absent file is not re-checked on
+  /// every rebuild.
+  final Set<int> _checked = {};
+
+  bool hasChecked(int mediaId) => _checked.contains(mediaId);
+
+  final Map<int, String> _paths = {};
+
+  /// Get a file on disk, downloading it if there is a connection and it is not
+  /// there yet.
+  ///
+  /// Null means "not available right now", which is a different thing from
+  /// "gone": a photo that has never been downloaded and a photo whose download
+  /// just failed both render as a placeholder, and a failed download is not
+  /// remembered as a missing photo so it is retried next time.
+  Future<File?> file(int mediaId) async {
+    final existing = cachedFile(mediaId);
+    if (existing != null) return existing;
 
     final inFlight = _pending[mediaId];
     if (inFlight != null) return inFlight;
 
-    final request = _fetch(mediaId);
+    final request = _download(mediaId);
     _pending[mediaId] = request;
     try {
       return await request;
@@ -51,45 +86,109 @@ class MediaCache {
     }
   }
 
-  Future<String?> _fetch(int mediaId) async {
+  Future<File?> _download(int mediaId) async {
     try {
       final link = await _api.mediaLink(mediaId);
+      if (link.url.isEmpty) return null;
+
       _links[mediaId] = _Link(
         url: link.url,
         usableUntil: DateTime.now().add(
           Duration(seconds: link.expiresInSeconds),
         ),
       );
-      return link.url;
+
+      final response = await _api.fetchBytes(link.url);
+      if (response == null || response.isEmpty) return null;
+
+      final target = File('${(await _directory()).path}/media_$mediaId');
+      await target.writeAsBytes(response, flush: true);
+      _paths[mediaId] = target.path;
+      return target;
     } on ApiException {
-      // Not cached. A missing file will keep missing, but a network blip will
-      // not, and caching the failure would turn one dropped connection into a
-      // permanently blank bubble.
+      return null;
+    } on Object {
+      // No network, DNS gone, disk full. Any of them means "not now" rather than
+      // "never", so nothing is cached as a permanent failure.
       return null;
     }
   }
 
-  /// Drop one link, e.g. after the server says the file has gone.
-  void forget(int mediaId) => _links.remove(mediaId);
-
-  /// Drop everything.
+  /// Rebuild the id-to-path index from what is actually on disk.
   ///
-  /// Called on sign-out: these links were issued to a session that has ended, and
-  /// a cache of them outliving the account is exactly the sort of thing that
-  /// should not be left lying around.
-  void clear() {
+  /// Called once at startup, because the file names carry the media id and
+  /// nothing else remembers the mapping: an in-memory map built on download is
+  /// empty again on the next launch, and every photo would look like it had
+  /// never been seen.
+  Future<void> reindex() async {
+    try {
+      final directory = await _directory();
+      final entities = await directory.list().toList();
+      for (final entity in entities) {
+        final name = entity.path.split(Platform.pathSeparator).last;
+        if (!name.startsWith('media_')) continue;
+        final id = int.tryParse(name.substring('media_'.length));
+        if (id == null) continue;
+        _paths[id] = entity.path;
+        _checked.add(id);
+      }
+    } on Object {
+      // An unreadable cache directory is not worth failing a launch over. It
+      // only means photos are re-downloaded.
+    }
+  }
+
+  Future<Directory> _directory() async {
+    final override = _overrideDirectory;
+    if (override != null) {
+      if (!await override.exists()) await override.create(recursive: true);
+      return override;
+    }
+    final support = await getApplicationSupportDirectory();
+    final directory = Directory('${support.path}/media');
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    return directory;
+  }
+
+  /// Forget a file, e.g. after the server says it has expired.
+  void forget(int mediaId) {
+    final path = _paths.remove(mediaId);
+    if (path != null) {
+      unawaited(File(path).delete().catchError((_) => File(path)));
+    }
+    _links.remove(mediaId);
+    _checked.add(mediaId);
+  }
+
+  /// Forget everything.
+  ///
+  /// Called on sign-out. These are other people's photographs sitting in this
+  /// app's storage, and they have no business outliving the account.
+  Future<void> clear() async {
     _links.clear();
     _pending.clear();
+    _checked.clear();
+    _paths.clear();
+    try {
+      final directory = await _directory();
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    } on Object {
+      // Best effort. Sign-out has already happened by this point.
+    }
   }
 }
 
+/// A signed link, and when it stops being worth using.
 class _Link {
   _Link({required this.url, required this.usableUntil});
 
   final String url;
   final DateTime usableUntil;
 
-  bool get isUsable => DateTime.now().isBefore(usableUntil.subtract(
-    MediaCache._safetyMargin,
-  ));
+  bool get isUsable =>
+      DateTime.now().isBefore(usableUntil.subtract(MediaCache._safetyMargin));
 }

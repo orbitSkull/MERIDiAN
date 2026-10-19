@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../data/chat_models.dart';
 import '../models/settings.dart';
 import '../models/user.dart';
@@ -199,7 +201,16 @@ abstract class MeridianApi {
 
   /// A short-lived link to a file, after checking the viewer is in the
   /// conversation the file belongs to.
-  Future<MediaLink> mediaLink(int mediaId);
+Future<MediaLink> mediaLink(int mediaId);
+
+  /// The bytes behind a signed URL.
+  ///
+  /// Declared here rather than reaching for Dio in the media cache so there is
+  /// one place that knows how the app talks to the internet. A signed URL is
+  /// already its own authorisation, so this attaches no access token and must
+  /// not: the URL is the credential, and a token that outlives it is the thing
+  /// that would let a stale link be refreshed into a fresh one.
+  Future<Uint8List?> fetchBytes(String url);
 }
 
 /// One page from [MeridianApi.messages].

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,6 +10,7 @@ import '../../data/chat_models.dart';
 import '../../data/media_cache.dart';
 import '../../models/settings.dart';
 import '../../services/api_client.dart';
+import '../../services/connectivity_monitor.dart';
 import '../../services/meridian_api.dart';
 import '../../services/push_registration.dart';
 import 'conversation_controller.dart';
@@ -42,7 +45,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
   /// Lazily created so a preview that never taps the button never touches the
   /// platform channel.
   ImagePicker? _picker;
-  bool _sendingPhoto = false;
+
+  /// A photograph that has been chosen but not sent.
+  _StagedMedia? _staged;
+
+  bool _sending = false;
+
+  /// Whether the last real request succeeded.
+  ///
+  /// Read from [ConnectivityMonitor] rather than kept here, so there is one
+  /// answer to "are we online" rather than one per screen that can disagree.
+  bool get _isOnline =>
+      context.read<ConnectivityMonitor?>()?.isOnline ?? true;
 
   ConversationController get _controller => widget.controller;
 
@@ -102,13 +116,78 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _controller.loadOlder();
   }
 
+  void _onComposerChanged(String text) {
+    _controller.reportTyping(text.trim().isNotEmpty);
+    if (mounted) setState(() {});
+  }
+
+  /// Whether the send button does anything.
+  ///
+  /// Offline means offline for *everything*, text included. Text does have an
+  /// outbox that could hold it, so this could have stayed enabled -- but a send
+  /// that appears to work and then sits queued for an unknown length of time
+  /// reads as lost, and somebody who cannot send will go and find a signal rather
+  /// than keep tapping a button that looks broken.
+  ///
+  /// A staged photograph counts as something to send on its own; that is how
+  /// sending a picture with no words works.
+  bool get _canSend {
+    if (_sending) return false;
+    if (_composer.text.trim().isEmpty && _staged == null) return false;
+    return _isOnline;
+  }
+
   Future<void> _send() async {
-    final text = _composer.text;
-    if (text.trim().isEmpty) return;
+    if (_sending) return;
+    final text = _composer.text.trim();
+    final staged = _staged;
+    if (text.isEmpty && staged == null) return;
+
+    // The button is already disabled offline; this is the belt to its braces,
+    // for the keyboard shortcut which does not go through the button.
+    if (!_isOnline) {
+      _say('No connection, so nothing can be sent right now.');
+      return;
+    }
+
+    if (staged != null) {
+      setState(() => _sending = true);
+      final failure = await _controller.sendWithMedia(
+        bytes: staged.bytes,
+        mime: staged.mime,
+        filename: staged.filename,
+        caption: text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _sending = false;
+        // Cleared on success only. A failed send keeps the photograph *and* the
+        // caption on screen, because losing a picture somebody just chose to a
+        // flaky connection is the worst thing this screen can do.
+        if (failure == null) {
+          _staged = null;
+          _composer.clear();
+        }
+      });
+      if (failure != null) {
+        _say(failure);
+        return;
+      }
+      _controller.reportTyping(false);
+      await _scrollToNewest();
+      return;
+    }
+
     _composer.clear();
     await _controller.send(text);
     // Anchored to the bottom so the message just sent is visible.
     await _scrollToNewest();
+  }
+
+  void _say(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   /// The longest edge a sent photograph is allowed to have.
@@ -118,15 +197,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
   /// that has to carry it before the server will accept it.
   static const _maxEdge = 1920.0;
 
-  /// Pick a photograph and send it, with whatever is in the composer as a
-  /// caption.
+  /// Pick a photograph and hold it, without sending anything yet.
   ///
-  /// The picker is asked to shrink and re-encode natively rather than reading a
-  /// 12 MB original into Dart and compressing it there: a phone photo is
-  /// routinely over the server's ceiling, and a shrink that happens after the
-  /// bytes are in memory has already cost what it was meant to save.
+  /// Nothing is uploaded here. Uploading on pick means the bytes leave the phone
+  /// for a message that may never be sent, makes picking slow on a bad
+  /// connection, and -- the part that actually bit -- turns a failed send into a
+  /// lost caption as well as a lost photograph.
   Future<void> _attachPhoto() async {
-    if (_sendingPhoto) return;
+    if (_staged != null) return;
     final picker = _picker ??= ImagePicker();
 
     final XFile? picked;
@@ -150,27 +228,43 @@ class _ConversationScreenState extends State<ConversationScreen> {
     // Null is a cancelled picker, which is not a failure and gets no message.
     if (picked == null || !mounted) return;
 
-    final caption = _composer.text.trim();
-    setState(() => _sendingPhoto = true);
-    final failure = await _controller.sendWithMedia(
-      bytes: await picked.readAsBytes(),
-      mime: picked.mimeType ?? 'image/jpeg',
-      caption: caption,
-    );
+    // Read once, here, and keep it. The picker is allowed to release the file
+    // the moment it returns, so a path held until send would be a path to
+    // nothing.
+    final bytes = await picked.readAsBytes();
     if (!mounted) return;
-    setState(() => _sendingPhoto = false);
+    final mime = picked.mimeType ?? 'image/jpeg';
+    setState(() {
+      _staged = _StagedMedia(
+        bytes: bytes,
+        mime: mime,
+        filename: mime.contains('png') ? 'photo.png' : 'photo.jpg',
+      );
+    });
+  }
 
-    if (failure != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(failure)));
-      // The caption stays where it was when the send failed. A photograph that
-      // did not go should not also cost the person what they typed.
-      return;
-    }
-    _composer.clear();
-    _controller.reportTyping(false);
-    await _scrollToNewest();
+  /// Throw away the staged photograph without sending it.
+  void _discardStaged() => setState(() => _staged = null);
+
+  /// Open the emoji grid and insert whatever was tapped.
+  Future<void> _pickEmoji() async {
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => const _EmojiSheet(),
+    );
+    if (chosen == null || !mounted) return;
+
+    // Inserted at the caret rather than appended, so a caption can be written
+    // either side of it.
+    final selection = _composer.selection;
+    final text = _composer.text;
+    final at = selection.isValid ? selection.start : text.length;
+    final updated = text.replaceRange(at, at, chosen);
+    _composer.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: at + chosen.length),
+    );
   }
 
   Future<void> _scrollToNewest() async {
@@ -320,9 +414,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
             _Composer(
               controller: _composer,
               onSend: _send,
-              onChanged: (text) => _controller.reportTyping(text.trim().isNotEmpty),
+              onChanged: _onComposerChanged,
               onAttach: _attachPhoto,
-              sending: _sendingPhoto,
+              onEmoji: _pickEmoji,
+              sending: _sending,
+              staged: _staged,
+              onDiscardStaged: _discardStaged,
+              sendEnabled: _canSend,
               hint: 'Message',
             ),
           ],
@@ -558,9 +656,9 @@ class _DayDivider extends StatelessWidget {
 /// A plain function rather than a method: it needs nothing from the screen that
 /// called it, and a bubble that had to reach back up into the screen's state to
 /// show a picture is a bubble that cannot be built in a preview.
-void _openViewer(BuildContext context, ChatMessage message, String url) {
+void _openViewer(BuildContext context, ChatMessage message, File file) {
   Navigator.of(context).push(
-    MaterialPageRoute(builder: (_) => _PhotoViewer(url: url, message: message)),
+    MaterialPageRoute(builder: (_) => _PhotoViewer(file: file, message: message)),
   );
 }
 
@@ -573,18 +671,14 @@ class _AttachmentImage extends StatefulWidget {
 
   final int mediaId;
   final MediaCache? cache;
-  final void Function(String url) onOpen;
+  final void Function(File file) onOpen;
 
   @override
   State<_AttachmentImage> createState() => _AttachmentImageState();
 }
 
 class _AttachmentImageState extends State<_AttachmentImage> {
-  String? _url;
-
-  /// Set when the server declined, as distinct from "not yet": without the
-  /// distinction a refusal would be indistinguishable from slow, and the
-  /// placeholder would spin forever on a file that is gone.
+  File? _file;
   bool _refused = false;
 
   @override
@@ -597,7 +691,7 @@ class _AttachmentImageState extends State<_AttachmentImage> {
   void didUpdateWidget(_AttachmentImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.mediaId != widget.mediaId) {
-      _url = null;
+      _file = null;
       _refused = false;
       _resolve();
     }
@@ -606,15 +700,31 @@ class _AttachmentImageState extends State<_AttachmentImage> {
   Future<void> _resolve() async {
     final cache = widget.cache;
     if (cache == null) {
-      // A preview with no server. Not a failure, just nothing to show.
       if (mounted) setState(() => _refused = true);
       return;
     }
-    final url = await cache.urlFor(widget.mediaId);
+
+    // The disk first, always. A photo already on this device renders from it
+    // without asking anything of the network, which is the whole point: it is
+    // what makes an old conversation readable on a train.
+    final local = cache.cachedFile(widget.mediaId);
+    if (local != null) {
+      if (!mounted) return;
+      setState(() {
+        _file = local;
+        _refused = false;
+      });
+      return;
+    }
+
+    // Not here. Ask for it, which fails harmlessly with no network and writes
+    // the file on disk so the next render is instant and the next launch works
+    // offline.
+    final fetched = await cache.file(widget.mediaId);
     if (!mounted) return;
     setState(() {
-      _url = url;
-      _refused = url == null;
+      _file = fetched;
+      _refused = fetched == null;
     });
   }
 
@@ -662,18 +772,16 @@ class _AttachmentImageState extends State<_AttachmentImage> {
             // Sized before the bytes exist so the bubble does not resize under
             // the reader when they do.
             Container(width: 190, height: 140, color: scheme.surfaceContainerHighest),
-            if (_url != null)
+            if (_file != null)
               GestureDetector(
-                onTap: () => widget.onOpen(_url!),
-                child: Image.network(
-                  _url!,
+                onTap: () => widget.onOpen(_file!),
+                child: Image.file(
+                  _file!,
                   width: 190,
                   height: 140,
                   // Cover, so a very tall photograph is cropped rather than
                   // shrunk to a thumbnail the size of a stamp.
                   fit: BoxFit.cover,
-                  // The cache already remembers the link; this stops a rebuild
-                  // from re-decoding the same bitmap for a different URL.
                   filterQuality: FilterQuality.medium,
                   errorBuilder: (context, error, stack) => const SizedBox(
                     width: 190,
@@ -690,9 +798,9 @@ class _AttachmentImageState extends State<_AttachmentImage> {
 
 /// Full-screen view of one photograph.
 class _PhotoViewer extends StatelessWidget {
-  const _PhotoViewer({required this.url, required this.message});
+  const _PhotoViewer({required this.file, required this.message});
 
-  final String url;
+  final File file;
   final ChatMessage message;
 
   @override
@@ -713,8 +821,8 @@ class _PhotoViewer extends StatelessWidget {
         // somebody opens a photograph to do is look closely at part of it.
         child: InteractiveViewer(
           maxScale: 5,
-          child: Image.network(
-            url,
+          child: Image.file(
+            file,
             fit: BoxFit.contain,
             errorBuilder: (context, error, stack) => const Center(
               child: Text(
@@ -1170,6 +1278,74 @@ class _AddPeopleScreenState extends State<_AddPeopleScreen> {
 /// Always drawn, rather than only on the message that closes a run: the time is
 /// small and grey, and a bubble with a time in it is a bubble you can scan.
 /// WhatsApp made this choice years ago for the same reason.
+class _StagedMedia {
+  const _StagedMedia({
+    required this.bytes,
+    required this.mime,
+    required this.filename,
+  });
+
+  final List<int> bytes;
+  final String mime;
+  final String filename;
+}
+
+/// The emojies that actually get used.
+///
+/// A full keyboard is a thousand glyphs and a data file, and the ones people
+/// reach for in a college chat are a short list. An empty-ish keyboard that
+/// takes two taps to find anything is worse than a short one.
+class _EmojiSheet extends StatelessWidget {
+  const _EmojiSheet();
+
+  static const _emoji = [
+    '😀', '😂', '🙂', '😉', '😍', '🤔', '😅', '😂',
+    '😭', '😤', '😡', '🥳', '😴', '🤯', '😬', '🙃',
+    '👍', '👎', '🙏', '👏', '💪', '🤝', '✌️', '👌',
+    '❤️', '🔥', '💯', '✨', '🎉', '😂', '😅', '😎',
+    '📚', '📝', '📎', '📸', '⏰', '📍', '💡', '✅',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+        child: GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 8,
+            mainAxisSpacing: 4,
+            crossAxisSpacing: 4,
+          ),
+          itemCount: _emoji.length,
+          itemBuilder: (context, index) {
+            final emoji = _emoji[index];
+            return InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => Navigator.of(context).pop(emoji),
+              child: Center(
+                child: Text(emoji, style: const TextStyle(fontSize: 24)),
+              ),
+            );
+          },
+        ),
+      ),
+    ).withBackground(scheme);
+  }
+}
+
+extension on Widget {
+  /// A sheet with the app's own surface rather than the default scrim-coloured
+  /// one, so it does not read as a different app.
+  Widget withBackground(ColorScheme scheme) => ColoredBox(
+    color: scheme.surfaceContainer,
+    child: this,
+  );
+}
+
 class _BubbleMeta extends StatelessWidget {
   const _BubbleMeta({
     required this.message,
@@ -1592,7 +1768,11 @@ class _Composer extends StatelessWidget {
     required this.hint,
     this.onChanged,
     this.onAttach,
+    this.onEmoji,
     this.sending = false,
+    this.sendEnabled = true,
+    this.staged,
+    this.onDiscardStaged,
   });
 
   final TextEditingController controller;
@@ -1607,9 +1787,23 @@ class _Composer extends StatelessWidget {
   /// without a picker is drawn rather than crashing on tap.
   final Future<void> Function()? onAttach;
 
-  /// True while a photograph is being uploaded, so the button cannot be pressed
+  final Future<void> Function()? onEmoji;
+
+  /// True while a photograph is on its way, so the button cannot be pressed
   /// twice and send two copies.
   final bool sending;
+
+  /// Whether there is anything to send and it can be sent.
+  ///
+  /// Greyed rather than hidden, so the button does not appear and disappear
+  /// underneath somebody's thumb as they type the last character.
+  final bool sendEnabled;
+
+  /// A photograph chosen but not sent, previewed above the field so it is
+  /// obvious something is about to go.
+  final _StagedMedia? staged;
+
+  final VoidCallback? onDiscardStaged;
 
   @override
   Widget build(BuildContext context) {
@@ -1621,50 +1815,110 @@ class _Composer extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            IconButton(
-              onPressed: onAttach == null || sending ? null : onAttach,
-              icon: sending
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2.2),
-                    )
-                  : const Icon(Icons.add_photo_alternate_outlined),
-              tooltip: 'Send a photo',
-              color: scheme.onSurfaceVariant,
-            ),
-            Expanded(
-              child: TextField(
-                controller: controller,
-                onChanged: onChanged,
-                minLines: 1,
-                maxLines: 5,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => onSend(),
-                decoration: InputDecoration(
-                  hintText: hint,
-                  isDense: true,
-                  filled: true,
-                  fillColor: scheme.surfaceContainerHighest,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
+            // The staged photograph, above the field. Sitting *inside* the field's
+            // own row would squash it to one line and hide the caption somebody
+            // is halfway through typing.
+            if (staged != null) _StagedPreview(media: staged!, onRemove: onDiscardStaged),
+            Row(
+              children: [
+                // Left: attach. A paperclip rather than a picture icon, because
+                // this button is going to grow documents and files and a camera
+                // icon promises photographs only.
+                IconButton(
+                  onPressed: onAttach == null || sending ? null : onAttach,
+                  icon: const Icon(Icons.attach_file_rounded),
+                  tooltip: 'Attach',
+                  color: scheme.onSurfaceVariant,
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    onChanged: onChanged,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) {
+                      if (sendEnabled) onSend();
+                    },
+                    decoration: InputDecoration(
+                      hintText: staged == null ? hint : 'Add a caption…',
+                      isDense: true,
+                      filled: true,
+                      fillColor: scheme.surfaceContainerHighest,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              onPressed: onSend,
-              icon: const Icon(Icons.send_rounded),
-              tooltip: 'Send',
+                IconButton(
+                  onPressed: onEmoji,
+                  icon: const Icon(Icons.emoji_emotions_outlined),
+                  tooltip: 'Emoji',
+                  color: scheme.onSurfaceVariant,
+                ),
+                // Rightmost: send.
+                IconButton.filled(
+                  onPressed: sendEnabled && !sending ? onSend : null,
+                  icon: sending
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2.2),
+                        )
+                      : const Icon(Icons.send_rounded),
+                  tooltip: 'Send',
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The photograph that is chosen but not yet sent.
+class _StagedPreview extends StatelessWidget {
+  const _StagedPreview({required this.media, this.onRemove});
+
+  final _StagedMedia media;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.memory(
+              Uint8List.fromList(media.bytes),
+              width: 56,
+              height: 56,
+              fit: BoxFit.cover,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Photo ready to send',
+              style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+            ),
+          ),
+          IconButton(
+            onPressed: onRemove,
+            icon: const Icon(Icons.close_rounded, size: 20),
+            tooltip: 'Remove',
+          ),
+        ],
       ),
     );
   }

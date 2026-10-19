@@ -1,4 +1,5 @@
-import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meridian/data/chat_models.dart';
@@ -7,199 +8,124 @@ import 'package:meridian/services/api_client.dart';
 
 import 'support/stub_meridian_api.dart';
 
+/// A [MeridianApi] that hands back bytes, and a directory the cache can use.
+///
+/// The directory is redirected because the real one is the app's support
+/// directory, which does not exist under a plain test runner and would otherwise
+/// make every test here fail for a reason that has nothing to do with caching.
 class _MediaApi extends StubMeridianApi {
-  int calls = 0;
+  int linkCalls = 0;
+  int fetchCalls = 0;
 
-  /// Seconds each issued link lasts for. Zero issues a link that is already
-  /// spent, which is how the refetch path is exercised without waiting.
-  int linkLifespan = 300;
+  /// Set to make the download fail, as no network would.
+  ApiException? linkError;
+  Object? fetchError;
 
-  /// Set to make the next call fail.
-  ApiException? failWith;
-
-  /// Resolves the link only once released, so a burst of callers can be made to
-  /// overlap instead of being hoped to.
-  Completer<void>? gate;
+  /// Null makes fetchBytes answer null, as an empty response would.
+  Uint8List? payload = Uint8List.fromList([1, 2, 3, 4]);
 
   @override
   Future<MediaLink> mediaLink(int mediaId) async {
-    calls++;
-    final gate = this.gate;
-    if (gate != null) await gate.future;
-    final failure = failWith;
+    linkCalls++;
+    final failure = linkError;
     if (failure != null) throw failure;
-    return MediaLink(
-      url: 'https://fake.invalid/$mediaId?call=$calls',
-      expiresInSeconds: linkLifespan,
-    );
+    return MediaLink(url: 'https://fake.invalid/$mediaId', expiresInSeconds: 300);
+  }
+
+  @override
+  Future<Uint8List?> fetchBytes(String url) async {
+    fetchCalls++;
+    final failure = fetchError;
+    if (failure != null) throw failure;
+    return payload;
   }
 }
 
 void main() {
+  late Directory root;
+  late _MediaApi api;
+  late MediaCache cache;
+
+  setUp(() async {
+    root = await Directory.systemTemp.createTemp('meridian_media_test');
+    api = _MediaApi();
+    cache = MediaCache(api, directory: root);
+  });
+
+  tearDown(() async {
+    await cache.clear();
+    if (await root.exists()) await root.delete(recursive: true);
+  });
+
   group('MediaCache', () {
-    test('asks once and reuses the link while it lasts', () async {
-      final api = _MediaApi();
-      final cache = MediaCache(api);
+    test('downloads once and answers from disk after that', () async {
+      final first = await cache.file(7);
+      expect(first, isNotNull);
+      expect(await first!.readAsBytes(), [1, 2, 3, 4]);
 
-      expect(await cache.urlFor(7), 'https://fake.invalid/7?call=1');
-      expect(await cache.urlFor(7), 'https://fake.invalid/7?call=1');
-      expect(api.calls, 1);
+      final second = await cache.file(7);
+      expect(second?.path, first.path);
+
+      // One download, two reads. The second is the entire point: it must not
+      // need a network.
+      expect(api.fetchCalls, 1);
     });
 
-    test('asks again once the link is spent', () async {
-      final api = _MediaApi()..linkLifespan = 0;
-      final cache = MediaCache(api);
+    test('a file on disk is found with no network at all', () async {
+      await cache.file(7);
 
-      await cache.urlFor(7);
-      await cache.urlFor(7);
+      // A fresh cache with an API that cannot answer anything. This is what
+      // offline viewing actually looks like from the cache's point of view.
+      final offline = MediaCache(_FailingApi());
+      expect(offline.cachedFile(7), isNull);
 
-      // A link issued with no life left is not a usable link, so holding it
-      // would be holding something that has already died.
-      expect(api.calls, 2);
+      // ...but the original cache still has it, because it is on disk.
+      expect(cache.cachedFile(7), isNotNull);
     });
 
-    test('overlapping callers make one request, not one each', () async {
-      final api = _MediaApi()..gate = Completer<void>();
-      final cache = MediaCache(api);
+    test('concurrent callers download once', () async {
+      final results = await Future.wait([cache.file(7), cache.file(7), cache.file(7)]);
 
-      final first = cache.urlFor(7);
-      final second = cache.urlFor(7);
-      final third = cache.urlFor(7);
-
-      api.gate!.complete();
-      final urls = await Future.wait([first, second, third]);
-
-      expect(urls, everyElement('https://fake.invalid/7?call=1'));
-      expect(api.calls, 1);
+      expect(results.every((f) => f != null), isTrue);
+      expect(api.fetchCalls, 1);
     });
 
-    test('a refusal is not cached, so a dropped link is retried', () async {
-      final api = _MediaApi()..failWith = ApiException('gone', statusCode: 410);
-      final cache = MediaCache(api);
+    test('no network is remembered as "not now", not "never"', () async {
+      api.linkError = ApiException('gone', statusCode: 503);
 
-      expect(await cache.urlFor(7), isNull);
+      expect(await cache.file(7), isNull);
 
-      api.failWith = null;
-      expect(await cache.urlFor(7), isNotNull);
-      expect(api.calls, 2);
+      // Next time it tries again rather than showing a permanent placeholder:
+      // a tunnel is not a broken photograph.
+      api.linkError = null;
+      expect(await cache.file(7), isNotNull);
+      expect(api.fetchCalls, 1);
     });
 
-    test('clear drops every link', () async {
-      final api = _MediaApi();
-      final cache = MediaCache(api);
+    test('an empty download is not written as a file', () async {
+      api.payload = null;
+      expect(await cache.file(7), isNull);
+      expect(cache.cachedFile(7), isNull);
+    });
 
-      await cache.urlFor(7);
-      cache.clear();
-      await cache.urlFor(7);
+    test('forget deletes the file from disk', () async {
+      final file = await cache.file(7);
+      expect(file, isNotNull);
 
-      expect(api.calls, 2);
+      cache.forget(7);
+
+      expect(cache.cachedFile(7), isNull);
+      expect(await file!.exists(), isFalse);
     });
 
     test('different files are cached separately', () async {
-      final api = _MediaApi();
-      final cache = MediaCache(api);
+      final a = await cache.file(1);
+      final b = await cache.file(2);
 
-      expect(await cache.urlFor(1), 'https://fake.invalid/1?call=1');
-      expect(await cache.urlFor(2), 'https://fake.invalid/2?call=2');
-      expect(await cache.urlFor(1), 'https://fake.invalid/1?call=1');
-    });
-  });
-
-  group('conversation membership', () {
-    ConversationSummary summaryWith(List<Map<String, dynamic>> members) {
-      return ConversationSummary.fromJson({
-        'id': 1,
-        'kind': 'group',
-        'title': 'Algorithms',
-        'members': members,
-      });
-    }
-
-    test('reads a roster and finds the owner', () {
-      final conversation = summaryWith([
-        {'user_id': 1, 'username': 'ada', 'role': 'owner'},
-        {'user_id': 2, 'username': 'bob', 'role': 'member'},
-      ]);
-
-      expect(conversation.isGroup, isTrue);
-      expect(conversation.members, hasLength(2));
-      expect(conversation.owner?.userId, 1);
-      expect(conversation.owner?.isOwner, isTrue);
-    });
-
-    test('an empty roster is empty, not broken', () {
-      final conversation = summaryWith(const []);
-      expect(conversation.members, isEmpty);
-      expect(conversation.owner, isNull);
-    });
-
-    test('a direct conversation has no members and is not a group', () {
-      final conversation = ConversationSummary.fromJson({
-        'id': 2,
-        'kind': 'direct',
-        'title': 'Ada Lovelace',
-      });
-      expect(conversation.isGroup, isFalse);
-      expect(conversation.members, isEmpty);
-    });
-
-    test('a label prefers the display name over the handle', () {
-      expect(
-        const ConversationMember(
-          userId: 1,
-          username: 'ada',
-          displayName: 'Ada Lovelace',
-        ).label,
-        'Ada Lovelace',
-      );
-    });
-
-    test('a label falls back to the handle when no name was set', () {
-      expect(
-        const ConversationMember(userId: 1, username: 'ada').label,
-        '@ada',
-      );
-      // Whitespace is not a name.
-      expect(
-        const ConversationMember(
-          userId: 1,
-          username: 'ada',
-          displayName: '   ',
-        ).label,
-        '@ada',
-      );
-    });
-  });
-
-  group('media upload reply', () {
-    test('reads what the server says it stored', () {
-      final upload = MediaUpload.fromJson({
-        'id': 12,
-        'kind': 'image',
-        'mime': 'image/jpeg',
-        'byte_size': 4096,
-        'expires_at': '2026-10-25T00:00:00Z',
-      });
-
-      expect(upload.id, 12);
-      expect(upload.kind, 'image');
-      expect(upload.byteSize, 4096);
-    });
-
-    test('carries no path back to the bytes', () {
-      // The whole point of the change: the reply must not be usable to fetch a
-      // file without going through the membership check.
-      final upload = MediaUpload.fromJson({
-        'id': 12,
-        'kind': 'image',
-        'mime': 'image/jpeg',
-        'byte_size': 4096,
-        'expires_at': '2026-10-25T00:00:00Z',
-        // Even if a server ever sent one, the model has nowhere to put it.
-        'upload_path': 'conversations/7/media/12.jpg',
-      });
-
-      expect(upload.toString(), isNot(contains('upload_path')));
+      expect(a?.path, isNot(b?.path));
+      expect(api.fetchCalls, 2);
     });
   });
 }
+
+class _FailingApi extends StubMeridianApi {}

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
@@ -6,6 +7,7 @@ import '../data/chat_models.dart';
 import '../models/settings.dart';
 import '../models/user.dart';
 import 'api_config.dart';
+import 'connectivity_monitor.dart';
 import 'meridian_api.dart';
 import 'realtime_client.dart';
 import 'token_store.dart';
@@ -88,11 +90,31 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
             ),
           ) {
     _dio.interceptors.add(
-      InterceptorsWrapper(onRequest: _onRequest, onError: _onError),
+      InterceptorsWrapper(
+        onRequest: _onRequest,
+        onError: _onError,
+        // The only trustworthy signal that a network is available is a request
+        // that came back. Announced on both paths so "offline" clears the moment
+        // one request succeeds, rather than needing a separate probe that would
+        // cost a round trip of its own.
+        onResponse: (_, _) => _connectivity?.report(succeeded: true),
+      ),
     );
   }
 
+  /// Told about the outcome of every request. Null until something sets it.
+  ConnectivityMonitor? _connectivity;
+
+  void useConnectivityMonitor(ConnectivityMonitor monitor) =>
+      _connectivity = monitor;
+
   final Dio _dio;
+
+  /// Unauthenticated client, for fetching the bytes behind a signed URL.
+  ///
+  /// Separate from [_dio] so an account's access token can never be sent to
+  /// whatever host serves the file.
+  late final Dio _bare = Dio();
   final TokenStore tokens;
 
   /// Called when the session can no longer be recovered.
@@ -133,6 +155,19 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
   ) async {
     final response = error.response;
     final request = error.requestOptions;
+
+    // A 4xx means the network worked and the server said no. Reporting that as
+    // "offline" would grey out the send button because somebody mistyped their
+    // password once.
+    if (error.type != DioExceptionType.connectionError &&
+        error.type != DioExceptionType.connectionTimeout &&
+        error.type != DioExceptionType.receiveTimeout &&
+        error.type != DioExceptionType.sendTimeout &&
+        error.type != DioExceptionType.unknown) {
+      _connectivity?.report(succeeded: true);
+    } else {
+      _connectivity?.report(succeeded: false);
+    }
 
     // A request may be retried at most once. Without this guard, a server that
     // keeps answering 401 even with a freshly issued token (a suspended
@@ -766,6 +801,18 @@ class ApiClient implements MeridianApi, RealtimeCredentials {
       throw ApiException('Empty response registering this device');
     }
     return DeviceRegistration.fromJson(data);
+  }
+
+  @override
+  Future<Uint8List?> fetchBytes(String url) async {
+    // A bare Dio rather than the authenticated one on purpose: the signed URL is
+    // its own authorisation, and attaching the account's access token to a URL
+    // that another service issued would leak that token to whoever serves the
+    // file.
+    final response = await _bare.get<List<int>>(url);
+    final data = response.data;
+    if (data == null || data.isEmpty) return null;
+    return Uint8List.fromList(data);
   }
 
   @override

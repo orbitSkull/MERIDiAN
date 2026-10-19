@@ -5,6 +5,7 @@ import 'screens/session_gate.dart';
 import 'services/auth_service.dart';
 import 'services/chat_environment.dart';
 import 'services/chat_lifecycle.dart';
+import 'services/connectivity_monitor.dart';
 import 'services/push_registration.dart';
 import 'services/push_service.dart';
 import 'services/settings_store.dart';
@@ -18,10 +19,16 @@ Future<void> main() async {
   final settings = await SettingsStore.load();
 
   final auth = AuthService();
-  runApp(
+  final connectivity = ConnectivityMonitor()..start();
+  // Before runApp rather than from a provider callback: the monitor has to be
+  // answering requests from the very first one, which happens during the
+  // session restore below.
+  auth.api.useConnectivityMonitor(connectivity);
+runApp(
     MeridianApp(
       auth: auth,
       settings: settings,
+      connectivity: connectivity,
       // Built once here rather than per screen: the store is a database on
       // disk, and a second one per conversation would be a second chat history.
       chat: ChatEnvironmentHolder(api: auth.api),
@@ -34,11 +41,13 @@ class MeridianApp extends StatelessWidget {
     super.key,
     required this.auth,
     required this.settings,
+    required this.connectivity,
     required this.chat,
   });
 
   final AuthService auth;
   final SettingsStore settings;
+  final ConnectivityMonitor connectivity;
   final ChatEnvironmentHolder chat;
 
   @override
@@ -53,6 +62,10 @@ class MeridianApp extends StatelessWidget {
         // Above MaterialApp so every chat screen below can reach the store,
         // and so sign-out has one place to wipe another person's messages.
         ChangeNotifierProvider<ChatEnvironmentHolder>.value(value: chat),
+        // One answer to "can we reach the network", fed by the outcome of real
+        // requests rather than by the radio, which reports a bar of signal
+        // behind a lift door as a perfectly good connection.
+        ChangeNotifierProvider<ConnectivityMonitor>.value(value: connectivity),
         // Push registration follows the session for the same reason: a Firebase
         // token survives a sign-out, so without this a sold phone would keep
         // telling the next owner about the previous owner's messages.
