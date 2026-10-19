@@ -25,6 +25,7 @@ class InMemoryChatStore implements ChatStore, Outbox {
   int _nextRowId = 1;
   final Map<String, int> _rowIdByClientId = {};
 
+  @override
   bool isOpen = false;
   int clearCount = 0;
 

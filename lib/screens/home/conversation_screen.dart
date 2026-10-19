@@ -302,6 +302,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
                           message: messages[position],
                           mine: widget.myUserId == messages[position].senderId,
                           media: _controller.media,
+                          isGroup: _controller.conversation?.isGroup ?? false,
                           // Only the last message of a run carries a time and a
                           // tail. A timestamp on every bubble turns a
                           // conversation into a column of clocks.
@@ -1164,6 +1165,49 @@ class _AddPeopleScreenState extends State<_AddPeopleScreen> {
   }
 }
 
+/// The time, and the ticks, on the end of a bubble.
+///
+/// Always drawn, rather than only on the message that closes a run: the time is
+/// small and grey, and a bubble with a time in it is a bubble you can scan.
+/// WhatsApp made this choice years ago for the same reason.
+class _BubbleMeta extends StatelessWidget {
+  const _BubbleMeta({
+    required this.message,
+    required this.mine,
+    required this.foreground,
+    required this.showTimestamp,
+  });
+
+  final ChatMessage message;
+  final bool mine;
+  final Color foreground;
+
+  /// Kept so the layout still behaves if this is ever made conditional: the
+  /// bubble reserves the space rather than reflowing when it appears.
+  final bool showTimestamp;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = foreground.withValues(alpha: 0.55);
+    return Padding(
+      padding: const EdgeInsets.only(left: 8, bottom: 1),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _formatTime(message.createdAt),
+            style: TextStyle(fontSize: 11, color: muted),
+          ),
+          if (mine) ...[
+            const SizedBox(width: 3),
+            _Ticks(message: message, color: muted),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _Bubble extends StatelessWidget {
   const _Bubble({
     required this.message,
@@ -1171,6 +1215,7 @@ class _Bubble extends StatelessWidget {
     this.showTimestamp = true,
     this.continued = false,
     this.media,
+    this.isGroup = false,
   });
 
   final ChatMessage message;
@@ -1179,6 +1224,13 @@ class _Bubble extends StatelessWidget {
   /// Where short-lived links come from. Null in a preview that has no API to
   /// ask, in which case the image area simply shows its placeholder.
   final MediaCache? media;
+
+  /// Whether to name the sender.
+  ///
+  /// Only for groups. In a one-to-one there is exactly one other person and the
+  /// header already says who they are, so repeating their name over every bubble
+  /// is noise.
+  final bool isGroup;
 
   /// Whether this message closes a run, and so is the one that carries a time
   /// and the pointed corner.
@@ -1227,6 +1279,23 @@ class _Bubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
+            // The name, once per run and only when the run starts.
+            //
+            // Repeated on every bubble it reads as a table header on every
+            // line; once at the top of each run it labels the block, which is
+            // the thing a group reader actually wants.
+            if (!mine && isGroup && !continued)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  message.senderName ?? '',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: foreground.withValues(alpha: 0.75),
+                  ),
+                ),
+              ),
             if (message.expired)
               _Notice(
                 icon: Icons.history_toggle_off_rounded,
@@ -1241,7 +1310,35 @@ class _Bubble extends StatelessWidget {
                   onOpen: (url) => _openViewer(context, message, url),
                 ),
               if (message.body.isNotEmpty)
-                Text(message.body, style: TextStyle(color: foreground)),
+                // Time and ticks ride on the end of the text rather than sitting
+                // on their own line beneath it. A second row inside every
+                // bubble is what makes a conversation read as a spreadsheet of
+                // messages instead of a conversation.
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        message.body,
+                        style: TextStyle(color: foreground),
+                      ),
+                    ),
+                    _BubbleMeta(
+                      message: message,
+                      mine: mine,
+                      showTimestamp: showTimestamp,
+                      foreground: foreground,
+                    ),
+                  ],
+                )
+              else
+                _BubbleMeta(
+                  message: message,
+                  mine: mine,
+                  showTimestamp: showTimestamp,
+                  foreground: foreground,
+                ),
             ],
             if (message.attachmentExpired)
               _Notice(
@@ -1249,33 +1346,6 @@ class _Bubble extends StatelessWidget {
                 text: 'Attachment expired',
                 color: foreground,
               ),
-            if (showTimestamp || mine || message.canRetry)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (showTimestamp)
-                      Text(
-                        _formatTime(message.createdAt),
-                        style: Theme.of(context).textTheme.labelSmall
-                            ?.copyWith(
-                              color: foreground.withValues(alpha: 0.6),
-                            ),
-                      ),
-                    if (mine) ...[
-                      const SizedBox(width: 4),
-                      _Ticks(message: message, color: foreground),
-                    ],
-                  ],
-                ),
-              ),
-            // A failed send. One compact line, not two buttons inside the
-            // bubble: the banner above already says the message was not sent and
-            // offers a Retry for all of them, so repeating it here at button
-            // scale doubled the shouting and stretched the bubble to twice the
-            // height of the message it was about.
             if (message.canRetry) _FailedFooter(
               message: message,
               foreground: foreground,

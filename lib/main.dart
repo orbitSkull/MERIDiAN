@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'screens/session_gate.dart';
 import 'services/auth_service.dart';
 import 'services/chat_environment.dart';
+import 'services/chat_lifecycle.dart';
 import 'services/push_registration.dart';
 import 'services/push_service.dart';
 import 'services/settings_store.dart';
@@ -89,7 +90,7 @@ class MeridianApp extends StatelessWidget {
             theme: AppTheme.light(),
             darkTheme: AppTheme.dark(),
             themeMode: mode,
-            home: SessionGate(auth: auth),
+            home: ChatLifecycleObserver(child: SessionGate(auth: auth)),
           );
         },
       ),

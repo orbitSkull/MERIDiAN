@@ -51,6 +51,7 @@ class ChatMessage {
     required this.body,
     required this.kind,
     required this.senderId,
+    this.senderName,
     required this.createdAt,
     this.expiresAt,
     this.attachmentId,
@@ -78,6 +79,14 @@ class ChatMessage {
   final String body;
   final String kind;
   final int senderId;
+
+  /// Who sent it, as the server resolved it.
+  ///
+  /// Null on messages stored before the server started resolving names, and on
+  /// any message the server could not name. A group bubble falls back to
+  /// nothing rather than inventing a label: "Unknown" in a list of real names
+  /// reads as a rendering fault, whereas an absent one reads as "not known yet".
+  final String? senderName;
   final DateTime createdAt;
   final DateTime? expiresAt;
   final int? attachmentId;
@@ -150,6 +159,7 @@ class ChatMessage {
       body: (json['body'] as String?) ?? '',
       kind: (json['kind'] as String?) ?? 'text',
       senderId: json['sender_id'] as int,
+      senderName: json['sender_name'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
       expiresAt: json['expires_at'] == null
           ? null

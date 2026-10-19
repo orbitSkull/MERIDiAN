@@ -39,7 +39,7 @@ class SqliteChatStore implements ChatStore, Outbox {
   // ignore: prefer_initializing_formals
   SqliteChatStore({Database? database}) : _database = database;
 
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   Database? _database;
 
@@ -54,6 +54,9 @@ class SqliteChatStore implements ChatStore, Outbox {
     }
     return database;
   }
+
+  @override
+  bool get isOpen => _database != null;
 
   @override
   Future<void> open() async {
@@ -71,6 +74,21 @@ class SqliteChatStore implements ChatStore, Outbox {
       },
       onCreate: (db, version) async {
         await createSchema(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        // Only ever additive.
+        //
+        // The device is the archive of a server that keeps a sliding window, so
+        // losing this table on an upgrade means losing conversations the
+        // server has already forgotten. There is no rebuild path here on
+        // purpose: nothing in this schema is worth that, and every future
+        // version adds a column rather than changing one.
+        if (oldVersion < 2) {
+          // v2: the server started resolving who sent a message, so a group
+          // bubble can finally show a name. Null on old rows until the next
+          // sync, which is a missing name rather than a missing message.
+          await db.execute('ALTER TABLE messages ADD COLUMN sender_name TEXT');
+        }
       },
     );
   }
@@ -113,6 +131,7 @@ class SqliteChatStore implements ChatStore, Outbox {
           body TEXT NOT NULL,
           kind TEXT NOT NULL DEFAULT 'text',
           sender_id INTEGER NOT NULL,
+          sender_name TEXT,
           created_at INTEGER NOT NULL,
           expires_at INTEGER,
           attachment_id INTEGER,
@@ -446,6 +465,7 @@ class SqliteChatStore implements ChatStore, Outbox {
       body: row['body']! as String,
       kind: row['kind']! as String,
       senderId: row['sender_id']! as int,
+      senderName: row['sender_name'] as String?,
       createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at']! as int),
       expiresAt: _fromMillis(row['expires_at'] as int?),
       attachmentId: row['attachment_id'] as int?,
@@ -473,6 +493,7 @@ class SqliteChatStore implements ChatStore, Outbox {
       'body': message.body,
       'kind': message.kind,
       'sender_id': message.senderId,
+      'sender_name': message.senderName,
       'created_at': message.createdAt.millisecondsSinceEpoch,
       'expires_at': message.expiresAt?.millisecondsSinceEpoch,
       'attachment_id': message.attachmentId,

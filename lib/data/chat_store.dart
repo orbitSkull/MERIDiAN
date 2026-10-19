@@ -16,6 +16,13 @@ import 'chat_models.dart';
 abstract class ChatStore {
   Future<void> open();
 
+  /// Whether [open] has been called and the store has not been cleared.
+  ///
+  /// So a resume can tell the difference between "already open, do not touch it"
+  /// and "needs opening", without either side keeping a second copy of the
+  /// answer and the two drifting apart.
+  bool get isOpen;
+
   Future<List<ConversationSummary>> conversations();
 
   Future<ConversationSummary?> conversation(int id);

@@ -85,6 +85,30 @@ class ChatEnvironment {
     realtime.start();
   }
 
+  /// Hold the socket while the app is in the background.
+  ///
+  /// Deliberately does *not* close the local store. Opening SQLite is cheap and
+  /// the file is already on disk, whereas a socket that reconnects on every
+  /// resume is what actually costs: each one is a WebSocket handshake, a token
+  /// refresh check and a burst of catch-up, and a phone that goes in and out of
+  /// a pocket does that dozens of times an hour for a socket nobody is reading.
+  ///
+  /// The store stays open throughout so that anything already on screen renders
+  /// the same way it did a moment ago.
+  Future<void> pause() => realtime.stop();
+
+  /// Come back.
+  ///
+  /// Reconnects and then syncs, in that order. Reconnecting alone would leave
+  /// the conversation list showing whatever was there when the phone went to
+  /// sleep; the socket only delivers what happens *after* it is open, so
+  /// anything sent while the app was away needs catching up explicitly.
+  Future<void> resume() async {
+    if (!store.isOpen) await store.open();
+    realtime.start();
+    await sync.syncAll();
+  }
+
   /// Stop listening. Separate from [clear], which erases.
   ///
   /// They are called together on sign-out and nowhere else, but they are
