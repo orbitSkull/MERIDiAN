@@ -194,6 +194,7 @@ class RealtimeClient {
   void start() {
     if (_running) return;
     _running = true;
+    print('[RealtimeClient] start() called');
     unawaited(_connectLoop());
   }
 
@@ -270,6 +271,7 @@ class RealtimeClient {
 
   Future<void> _connectLoop() async {
     while (_running) {
+      print('[RealtimeClient] _connectLoop: attempting connection (attempt $_attempt)');
       final ok = await _attemptConnection();
       if (!_running) return;
 
@@ -315,7 +317,9 @@ class RealtimeClient {
   /// server keeps saying no. Against a real server that is an unbounded refresh
   /// loop, and against a stub that always succeeds it never terminates at all.
   Future<bool> _attemptConnection({bool mayRefresh = true}) async {
+    print('[RealtimeClient] _attemptConnection: getting token...');
     final token = await _api.accessTokenForSocket();
+    print('[RealtimeClient] _attemptConnection: token=${token != null ? 'present' : 'null'}');
     if (token == null || token.isEmpty) {
       _events.add(
         const RealtimeFailure('Not signed in, so there is nothing to connect to.'),
@@ -324,8 +328,10 @@ class RealtimeClient {
     }
 
     try {
+      print('[RealtimeClient] _attemptConnection: connecting to $_endpoint');
       final channel = _connect(_endpoint);
       _channel = channel;
+      print('[RealtimeClient] _attemptConnection: sending auth');
       channel.send(jsonEncode({'type': 'auth', 'token': token}));
 
       final ready = await channel.stream
@@ -353,47 +359,55 @@ class RealtimeClient {
       }
 
       _connected = true;
+      print('[RealtimeClient] _attemptConnection: authenticated as user_id=${ready['user_id']}');
       _events.add(RealtimeReady((ready['user_id'] as num?)?.toInt() ?? 0));
       _events.add(const RealtimeStatus(connected: true));
       return true;
     } on TimeoutException {
+      print('[RealtimeClient] _attemptConnection: timeout');
       await _closeChannel();
       return false;
-    } catch (_) {
+    } catch (e) {
+      print('[RealtimeClient] _attemptConnection: error=$e');
       await _closeChannel();
       return false;
     }
   }
 
-  /// Forward server events until the socket ends.
+/// Forward server events until the socket ends.
   Future<void> _pump() async {
     final channel = _channel;
     if (channel == null) return;
 
     final completer = Completer<void>();
+    print('[RealtimeClient] _pump: starting to listen for events');
     _subscription = channel.stream.listen(
       (raw) {
+        print('[RealtimeClient] _pump: raw event received: $raw');
         final event = _decode(raw);
         if (event == null) return;
         final translated = _translate(event);
-        if (translated != null) _events.add(translated);
+        if (translated != null) {
+          print('[RealtimeClient] _pump: translated event: ${translated.runtimeType}');
+          _events.add(translated);
+        }
       },
       onDone: () {
+        print('[RealtimeClient] _pump: stream closed (onDone)');
         _connected = false;
         _events.add(const RealtimeStatus(connected: false, detail: 'closed'));
         if (!completer.isCompleted) completer.complete();
       },
-      onError: (Object _) {
+      onError: (Object e) {
+        print('[RealtimeClient] _pump: stream error: $e');
         _connected = false;
         _events.add(const RealtimeStatus(connected: false, detail: 'failed'));
         if (!completer.isCompleted) completer.complete();
       },
       cancelOnError: true,
     );
-
     await completer.future;
-    if (identical(_pumpDone, completer)) _pumpDone = null;
-    _connected = false;
+    print('[RealtimeClient] _pump: completed');
   }
 
   Future<void> _closeChannel() async {

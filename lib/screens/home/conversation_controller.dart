@@ -112,12 +112,14 @@ class ConversationController extends ChangeNotifier {
   int get pendingCount => _messages.where((m) => m.isPending).length;
 
   Future<void> open() async {
+    print('[ConversationController] open() called for conversation $conversationId');
     _listen();
     _loading = true;
     _notify();
     await _reload();
     _loading = false;
     _notify();
+    print('[ConversationController] open() done, messages=${_messages.length}');
     _startFallbackPoll();
 
     // Best effort: the conversation is already on screen from SQLite, so a
@@ -155,14 +157,15 @@ class ConversationController extends ChangeNotifier {
     final realtime = _realtime;
     if (realtime == null || _events != null) return;
 
+    print('[Realtime] Starting listener for conversation $conversationId');
     _events = realtime.events.listen((event) {
-      // Every handler is fire-and-forget: a socket event must never be able to
-      // block the stream, and none of these is worth awaiting inside a listener.
+      print('[Realtime] Received event: ${event.runtimeType}');
       unawaited(_onRealtime(event));
     });
   }
 
   Future<void> _onRealtime(RealtimeEvent event) async {
+    print('[Realtime] Processing event: ${event.runtimeType}');
     if (event is RealtimeMessage) {
       await _onMessage(event.data);
       return;
@@ -199,12 +202,19 @@ class ConversationController extends ChangeNotifier {
 
   /// A message arrived while this conversation was open.
   Future<void> _onMessage(Map<String, dynamic> data) async {
+    print('[Realtime] _onMessage called for conversation $conversationId');
     final message = ChatMessage.fromJson(data);
-    if (message.conversationId != conversationId) return;
+    print('[Realtime] Parsed message: id=${message.id} clientId=${message.clientId} senderId=${message.senderId} seq=${message.seq} conversationId=${message.conversationId}');
+    if (message.conversationId != conversationId) {
+      print('[Realtime] Ignoring - wrong conversation (got ${message.conversationId}, expected $conversationId)');
+      return;
+    }
 
     await _store.upsertMessages([message]);
+    print('[Realtime] Message upserted, reloading...');
     await _reload();
     _notify();
+    print('[Realtime] Reload complete, messages count: ${_messages.length}');
 
     // Acknowledge receipt. This is the half that makes the double grey tick
     // exist: without it the message is on the phone but the server has no idea,
