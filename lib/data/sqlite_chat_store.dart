@@ -176,6 +176,7 @@ class SqliteChatStore implements ChatStore, Outbox {
 
   @override
   Future<List<ConversationSummary>> conversations() async {
+    await open();
     final rows = await _db.query(
       'conversations',
       orderBy: 'last_message_at DESC, id DESC',
@@ -185,6 +186,7 @@ class SqliteChatStore implements ChatStore, Outbox {
 
   @override
   Future<ConversationSummary?> conversation(int id) async {
+    await open();
     final rows = await _db.query('conversations', where: 'id = ?', whereArgs: [id]);
     if (rows.isEmpty) return null;
     return _conversationFromRow(rows.first);
@@ -196,6 +198,16 @@ class SqliteChatStore implements ChatStore, Outbox {
     int limit = 50,
     int? beforeSeq,
   }) async {
+    // Opened here, not only by whoever opened the app.
+    //
+    // The environment opens this store without awaiting it, so a chat screen can
+    // be built while the database is still coming up. A read against an unopened
+    // store throws, the message list stays empty, and the conversation renders
+    // "No messages yet" over messages that are sitting on the phone -- which
+    // looks exactly like data loss and is only fixed by navigating away and
+    // back, once something else has finished opening it.
+    await open();
+
     final where = <String>['conversation_id = ?'];
     final args = <Object?>[conversationId];
     if (beforeSeq != null) {
